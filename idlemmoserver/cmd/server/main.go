@@ -19,7 +19,7 @@ func main() {
 	logx.Init()
 
 	// 1) 加载表驱动配置
-	if err := domain.LoadConfig("internal/domain/config.json"); err != nil {
+	if err := domain.LoadConfig("internal/domain/config_full.json"); err != nil {
 		log.Fatal(err)
 	}
 
@@ -33,12 +33,15 @@ func main() {
 		return actors.NewPersistActor(repo)
 	}))
 
-	// 4) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
+	// 4) 设置全局persistPID
+	gateway.SetPersistPID(persistPID)
+
+	// 5) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
 	gatewayPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
 		return actors.NewGatewayActor(root, persistPID)
 	}))
 
-	// 5) HTTP/WS 路由
+	// 6) HTTP/WS 路由
 	r := gin.Default()
 	// ✅ 加上 CORS 中间件
 	r.Use(cors.New(cors.Config{

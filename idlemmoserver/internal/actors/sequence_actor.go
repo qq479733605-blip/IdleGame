@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"idlemmoserver/internal/domain"
+	"idlemmoserver/internal/logx"
 
 	"github.com/asynkron/protoactor-go/actor"
 )
@@ -45,9 +46,25 @@ func (s *SequenceActor) Receive(ctx actor.Context) {
 		if r.RareEvt != nil {
 			rareName = r.RareEvt.Name
 		}
+
+		// 添加调试日志
+		logx.Info("Sequence Tick", "playerID", s.playerID, "seqID", s.seq.ID,
+			"gains", r.Gains, "items", len(r.Items), "rareEvent", rareName)
+
+		// 如果有物品掉落，打印详细信息
+		for _, item := range r.Items {
+			logx.Info("Item drop", "itemID", item.ID, "itemName", item.Name, "chance", item.DropChance)
+		}
+
+		// 只有当有奇遇时才包含
+		var rareEvents []string
+		if r.RareEvt != nil {
+			rareEvents = []string{rareName}
+		}
+
 		ctx.Send(s.parent, &SeqResult{
 			Gains:   r.Gains,
-			Rare:    []string{rareName},
+			Rare:    rareEvents,
 			Items:   r.Items,
 			SeqID:   s.seq.ID,
 			Level:   r.Level,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 )
 
 var Sequences map[string]*SequenceConfig
@@ -50,8 +51,8 @@ func GetAllSequences() []SeqBrief {
 		}
 		briefs = append(briefs, SeqBrief{ID: id, Name: name})
 	}
-	// （可选）按 ID 排序，确保稳定顺序
-	// sort.Slice(briefs, func(i, j int) bool { return briefs[i].ID < briefs[j].ID })
+	// 按 ID 排序，确保稳定顺序，修复重连时序列错乱问题
+	sort.Slice(briefs, func(i, j int) bool { return briefs[i].ID < briefs[j].ID })
 	return briefs
 }
 

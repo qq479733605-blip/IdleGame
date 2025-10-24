@@ -1,0 +1,184 @@
+{
+  "meditation": {
+    "name": "打坐修炼",
+    "base_gain": 15,
+    "growth_factor": 3.0,
+    "tick_interval": 3,
+    "rare_chance": 0.15,
+    "levelup_exp": 120,
+    "exp_rate": 0.6,
+    "drops": [
+      { "id": "essence_fire", "name": "火灵精", "drop_chance": 0.1, "value": 5 },
+      { "id": "essence_water", "name": "水灵精", "drop_chance": 0.1, "value": 5 },
+      { "id": "essence_earth", "name": "土灵精", "drop_chance": 0.1, "value": 5 },
+      { "id": "essence_wind", "name": "风灵精", "drop_chance": 0.1, "value": 5 },
+      { "id": "pill_low", "name": "筑基丹", "drop_chance": 0.05, "value": 10 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·心流澄明", "effect": "灵气翻倍", "mult_gain": 3.0 },
+      { "name": "奇遇·天地感应", "effect": "修为暴涨", "mult_gain": 5.0 }
+    ]
+  },
+
+  "herb_gathering": {
+    "name": "深山采药",
+    "base_gain": 20,
+    "growth_factor": 2.8,
+    "tick_interval": 4,
+    "rare_chance": 0.20,
+    "levelup_exp": 150,
+    "exp_rate": 0.7,
+    "drops": [
+      { "id": "herb_spirit", "name": "灵草", "drop_chance": 0.8, "value": 3 },
+      { "id": "herb_rare", "name": "千年灵芝", "drop_chance": 0.3, "value": 8 },
+      { "id": "herb_legendary", "name": "仙界神草", "drop_chance": 0.05, "value": 20 },
+      { "id": "flower_soul", "name": "魂花", "drop_chance": 0.15, "value": 6 }
+    ],
+    "rare_events": [
+      { "name": "奇遇·药王传承", "effect": "药材品质提升", "mult_gain": 4.0 },
+      { "name": "发现·秘境入口", "effect": "特殊药材出现", "mult_gain": 6.0 }
+    ]
+  },
+
+  "mining": {
+    "name": "灵矿采掘",
+    "base_gain": 18,
+    "growth_factor": 3.2,
+    "tick_interval": 4,
+    "rare_chance": 0.18,
+    "levelup_exp": 140,
+    "exp_rate": 0.65,
+    "drops": [
+      { "id": "ore_iron", "name": "玄铁矿", "drop_chance": 0.7, "value": 3 },
+      { "id": "ore_copper", "name": "赤铜矿", "drop_chance": 0.5, "value": 4 },
+      { "id": "ore_silver", "name": "皓银矿", "drop_chance": 0.3, "value": 7 },
+      { "id": "ore_gold", "name": "金沙矿", "drop_chance": 0.2, "value": 12 },
+      { "id": "crystal_spirit", "name": "灵晶石", "drop_chance": 0.1, "value": 15 }
+    ],
+    "rare_events": [
+      { "name": "奇遇·矿脉觉醒", "effect": "矿石产量翻倍", "mult_gain": 3.5 },
+      { "name": "发现·上古矿藏", "effect": "珍贵矿石出现", "mult_gain": 5.0 }
+    ]
+  },
+
+  "alchemy": {
+    "name": "炼丹修行",
+    "base_gain": 25,
+    "growth_factor": 4.0,
+    "tick_interval": 5,
+    "rare_chance": 0.25,
+    "levelup_exp": 200,
+    "exp_rate": 0.8,
+    "drops": [
+      { "id": "pill_low", "name": "筑基丹", "drop_chance": 0.6, "value": 8 },
+      { "id": "pill_mid", "name": "金丹", "drop_chance": 0.3, "value": 15 },
+      { "id": "pill_high", "name": "元婴丹", "drop_chance": 0.1, "value": 30 },
+      { "id": "elixir_life", "name": "生命仙露", "drop_chance": 0.15, "value": 12 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·丹道有成", "effect": "丹药品质飞跃", "mult_gain": 4.0 },
+      { "name": "奇遇·丹炉异象", "effect": "神丹降世", "mult_gain": 8.0 }
+    ]
+  },
+
+  "weapon_crafting": {
+    "name": "法器锻造",
+    "base_gain": 22,
+    "growth_factor": 3.5,
+    "tick_interval": 6,
+    "rare_chance": 0.22,
+    "levelup_exp": 180,
+    "exp_rate": 0.75,
+    "drops": [
+      { "id": "sword_basic", "name": "基础法剑", "drop_chance": 0.5, "value": 6 },
+      { "id": "sword_spirit", "name": "灵剑", "drop_chance": 0.3, "value": 12 },
+      { "id": "sword_divine", "name": "仙剑", "drop_chance": 0.1, "value": 25 },
+      { "id": "armor_basic", "name": "法袍", "drop_chance": 0.4, "value": 8 },
+      { "id": "charm_protection", "name": "护身符", "drop_chance": 0.2, "value": 10 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·铸器通神", "effect": "神器诞生", "mult_gain": 5.0 },
+      { "name": "奇遇·天外陨铁", "effect": "绝世神兵现世", "mult_gain": 7.0 }
+    ]
+  },
+
+  "talisman_making": {
+    "name": "符箓绘制",
+    "base_gain": 20,
+    "growth_factor": 3.3,
+    "tick_interval": 4,
+    "rare_chance": 0.20,
+    "levelup_exp": 160,
+    "exp_rate": 0.7,
+    "drops": [
+      { "id": "talisman_basic", "name": "基础符箓", "drop_chance": 0.7, "value": 4 },
+      { "id": "talisman_advanced", "name": "高级符箓", "drop_chance": 0.4, "value": 9 },
+      { "id": "talisman_legendary", "name": "传说符箓", "drop_chance": 0.1, "value": 20 },
+      { "id": "scroll_ancient", "name": "古老卷轴", "drop_chance": 0.25, "value": 7 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·符道大成", "effect": "神符天成", "mult_gain": 4.5 },
+      { "name": "奇遇·古籍出土", "effect": "失传符术再现", "mult_gain": 6.0 }
+    ]
+  },
+
+  "spirit_beast_taming": {
+    "name": "灵兽驯养",
+    "base_gain": 24,
+    "growth_factor": 3.8,
+    "tick_interval": 5,
+    "rare_chance": 0.28,
+    "levelup_exp": 190,
+    "exp_rate": 0.78,
+    "drops": [
+      { "id": "beast_core", "name": "兽核", "drop_chance": 0.6, "value": 5 },
+      { "id": "beast_soul", "name": "兽魂", "drop_chance": 0.3, "value": 11 },
+      { "id": "beast_essence", "name": "灵兽精元", "drop_chance": 0.15, "value": 18 },
+      { "id": "companion_egg", "name": "灵兽蛋", "drop_chance": 0.08, "value": 25 }
+    ],
+    "rare_events": [
+      { "name": "奇遇·神兽降临", "effect": "上古灵兽现身", "mult_gain": 6.0 },
+      { "name": "发现·异兽秘境", "effect": "珍稀兽类聚集", "mult_gain": 5.5 }
+    ]
+  },
+
+  "array_mastery": {
+    "name": "阵法研习",
+    "base_gain": 23,
+    "growth_factor": 4.2,
+    "tick_interval": 6,
+    "rare_chance": 0.24,
+    "levelup_exp": 210,
+    "exp_rate": 0.82,
+    "drops": [
+      { "id": "array_basic", "name": "基础阵盘", "drop_chance": 0.5, "value": 7 },
+      { "id": "array_advanced", "name": "高级阵盘", "drop_chance": 0.3, "value": 14 },
+      { "id": "array_legendary", "name": "传说阵图", "drop_chance": 0.1, "value": 28 },
+      { "id": "rune_power", "name": "力量符文", "drop_chance": 0.35, "value": 9 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·阵法通玄", "effect": "天阵自现", "mult_gain": 5.5 },
+      { "name": "奇遇·古阵遗迹", "effect": "失传阵法重现", "mult_gain": 7.5 }
+    ]
+  },
+
+  "sword_practice": {
+    "name": "剑道修行",
+    "base_gain": 21,
+    "growth_factor": 3.6,
+    "tick_interval": 4,
+    "rare_chance": 0.21,
+    "levelup_exp": 170,
+    "exp_rate": 0.73,
+    "drops": [
+      { "id": "sword_intent", "name": "剑意碎片", "drop_chance": 0.8, "value": 4 },
+      { "id": "sword_aura", "name": "剑气", "drop_chance": 0.4, "value": 10 },
+      { "id": "sword_manual", "name": "剑谱", "drop_chance": 0.2, "value": 16 },
+      { "id": "essence_sword", "name": "剑灵精华", "drop_chance": 0.12, "value": 22 }
+    ],
+    "rare_events": [
+      { "name": "顿悟·剑心通明", "effect": "剑道大成", "mult_gain": 4.8 },
+      { "name": "奇遇·名剑传承", "effect": "绝世剑法降临", "mult_gain": 6.5 }
+    ]
+  }
+}
