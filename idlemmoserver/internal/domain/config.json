@@ -1,0 +1,31 @@
+{
+  "meditation": {
+    "name": "打坐修炼",
+    "base_gain": 10,
+    "growth_factor": 2.5,
+    "tick_interval": 3,
+    "rare_chance": 0.1,
+    "drops": [
+      { "id": "herb_spirit", "name": "灵草", "drop_chance": 0.25, "value": 3 },
+      { "id": "ore_iron", "name": "铁矿石", "drop_chance": 0.35, "value": 1 }
+    ],
+    "rare_events": [
+      { "name": "奇遇·灵气涌动", "effect": "收益翻倍", "mult_gain": 2.0 }
+    ]
+  },
+
+  "mining": {
+    "name": "灵矿采掘",
+    "base_gain": 15,
+    "growth_factor": 3.2,
+    "tick_interval": 4,
+    "rare_chance": 0.15,
+    "drops": [
+      { "id": "ore_copper", "name": "铜矿石", "drop_chance": 0.4, "value": 2 },
+      { "id": "ore_silver", "name": "银矿石", "drop_chance": 0.2, "value": 4 }
+    ],
+    "rare_events": [
+      { "name": "奇遇·灵石矿脉", "effect": "双倍产出", "mult_gain": 2.0 }
+    ]
+  }
+}
