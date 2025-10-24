@@ -1,7 +1,6 @@
 package actors
 
 import (
-	"fmt"
 	"time"
 
 	"idlemmoserver/internal/domain"
@@ -16,21 +15,17 @@ type SequenceActor struct {
 	parent   *actor.PID
 }
 
-type SeqTick struct{}
-
 func NewSequenceActor(playerID, seqID string, level int, parent *actor.PID) actor.Actor {
 	cfg, ok := domain.GetSequenceConfig(seqID)
 	if !ok {
-		panic(fmt.Sprintf("sequence config not found: %s", seqID))
+		panic("sequence config not found: " + seqID)
 	}
-
 	seq := &domain.Sequence{
 		ID:        seqID,
 		Level:     level,
 		StartTime: time.Now(),
 		LastTick:  time.Now(),
 	}
-
 	return &SequenceActor{
 		playerID: playerID,
 		seq:      seq,
@@ -45,23 +40,23 @@ func (s *SequenceActor) Receive(ctx actor.Context) {
 		s.scheduleNext(ctx)
 
 	case *SeqTick:
-		result := s.seq.Tick(s.cfg)
-
+		r := s.seq.Tick(s.cfg)
 		var rareName string
-		if result.RareEvt != nil {
-			rareName = result.RareEvt.Name
+		if r.RareEvt != nil {
+			rareName = r.RareEvt.Name
 		}
-
-		// ⚡ 向父 Actor 汇报完整掉落
 		ctx.Send(s.parent, &SeqResult{
-			Gains: result.Gains,
-			Rare:  []string{rareName},
-			Items: result.Items, // 新增字段：掉落物品
+			Gains:   r.Gains,
+			Rare:    []string{rareName},
+			Items:   r.Items,
+			SeqID:   s.seq.ID,
+			Level:   r.Level,
+			CurExp:  r.CurExp,
+			Leveled: r.Leveled,
 		})
-
 		s.scheduleNext(ctx)
 
-	case *SeqStop:
+	case *SeqStop, *actor.Stopping:
 		ctx.Stop(ctx.Self())
 	}
 }

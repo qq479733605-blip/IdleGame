@@ -12,7 +12,7 @@ var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { retu
 
 // InitRoutes 注册 HTTP 与 WS 路由
 func InitRoutes(r *gin.Engine, root *actor.RootContext, gatewayPID *actor.PID) {
-	// 简单登录：返回一个 mock token（生产需替换为真实认证）
+	// 简单登录：返回一个 mock token
 	r.POST("/login", func(c *gin.Context) {
 		var req struct {
 			Username string `json:"username"`
@@ -28,7 +28,6 @@ func InitRoutes(r *gin.Engine, root *actor.RootContext, gatewayPID *actor.PID) {
 
 	// WebSocket：?token=xxx
 	r.GET("/ws", func(c *gin.Context) {
-		// 这里可以校验 token（省略）
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return

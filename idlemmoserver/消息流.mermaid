@@ -1,0 +1,67 @@
+sequenceDiagram
+    autonumber
+    participant Client as 客户端(浏览器/游戏前端)
+    participant Gin as Gin(HTTP)
+    participant WS as WebSocket(Gorilla)
+    participant G as GatewayActor
+    participant P as PlayerActor
+    participant S as SequenceActor
+    participant Sch as SchedulerActor
+    participant D as PersistActor
+    participant Repo as Repository(DB/Redis)
+
+%% 登录阶段
+    Client->>Gin: POST /login {username,password}
+    Gin-->>Client: 200 {token(JWT)}
+
+%% 建立WS并绑定玩家
+    Client->>WS: GET /ws?token=JWT (WebSocket握手)
+    WS->>G: OnOpen(token)
+    G->>P: EnsurePlayer{playerID}（若不存在则Spawn）
+    G-->>Client: S_LoginOK{playerView}
+
+%% 启动序列
+    Client->>G: C_StartSeq{seq_id, config, target}
+    G->>P: StartSequence{seq_id, config, target}
+    alt 当前无序列运行
+        P->>P: 校验状态/背包/冷却
+        P->>S: Spawn SequenceActor(seq_id, level, buffs)
+        P-->>Client: S_SeqStarted{seq_id}
+        Sch->>S: AddTarget(注册Tick)
+    else 已有序列
+        P-->>Client: S_Err{sequence running}
+    end
+
+%% Tick 结算循环（统一调度）
+    loop 每Δt秒（统一节奏）
+        Sch->>S: SeqTick
+        S->>S: 领域计算(Tick)：消耗/产出/稀有/奇遇
+        S-->>P: SeqResult{gains, rare, events, progress}
+        P->>P: 更新玩家领域状态（背包/经验/序列等级）
+        P-->>Client: S_SeqResult{ui_delta}
+        P->>D: Persist{PlayerSnapshot or Events} (异步)
+        D->>Repo: SavePlayer/AppendEvents
+        Repo-->>D: OK
+    end
+
+%% 目标达成/手动停止
+    opt 达到目标或玩家主动停止
+        Client->>G: C_StopSeq{}
+        G->>P: StopSequence{}
+        P->>S: SeqStop
+        Sch->>S: RemoveTarget(取消Tick)
+        S-->>P: Finalize{last_result}
+        P->>D: Persist{FinalSnapshot}
+        D->>Repo: SavePlayer
+        Repo-->>D: OK
+        P-->>Client: S_SeqStopped{summary}
+        S->>S: StopSelf()
+    end
+
+%% 断线重连（可选）
+    opt 断线后重连
+        Client->>WS: /ws?token
+        WS->>G: OnOpen(token)
+        G->>P: RebindConn
+        P-->>Client: S_PlayerSync{playerView, runningSeqState?}
+    end
