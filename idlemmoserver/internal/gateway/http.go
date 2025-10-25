@@ -69,7 +69,7 @@ func (cm *ConnectionManager) Stop() {
 var globalConnManager *ConnectionManager
 
 // InitRoutes 注册 HTTP 与 WS 路由
-func InitRoutes(r *gin.Engine, root *actor.RootContext, gatewayPID *actor.PID) {
+func InitRoutes(r *gin.Engine, root *actor.RootContext, gatewayPID *actor.PID, userHandler *UserHandler) {
 	// 初始化连接管理器
 	globalConnManager = NewConnectionManager()
 
@@ -96,6 +96,11 @@ func InitRoutes(r *gin.Engine, root *actor.RootContext, gatewayPID *actor.PID) {
 		token := c.Query("token")
 		HandleWebSocketConnection(root, conn, token)
 	})
+
+	apiV1 := r.Group("/api/v1")
+	{
+		apiV1.POST("/users/register", userHandler.Register)
+	}
 }
 
 // HandleWebSocketConnection 处理WebSocket连接（新架构）

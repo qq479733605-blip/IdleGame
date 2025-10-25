@@ -1,69 +1,33 @@
 package main
 
 import (
-	"idlemmoserver/internal/actors"
-	"idlemmoserver/internal/domain"
-	"idlemmoserver/internal/gateway"
-	"idlemmoserver/internal/logx"
-	"idlemmoserver/internal/persist"
+	"context"
+	"errors"
 	"log"
-	"time"
+	"os/signal"
+	"syscall"
 
-	"github.com/asynkron/protoactor-go/actor"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	actorsmod "idlemmoserver/internal/app/modules/actors"
+	configmod "idlemmoserver/internal/app/modules/config"
+	httptransport "idlemmoserver/internal/app/modules/transport/http"
+	usermodule "idlemmoserver/internal/app/modules/user"
+	"idlemmoserver/internal/app/runtime"
+	"idlemmoserver/internal/logx"
 )
 
 func main() {
-
 	logx.Init()
 
-	// 1) 加载表驱动配置
-	if err := domain.LoadConfig("internal/domain/config_full.json"); err != nil {
-		log.Fatal(err)
-	}
-	if err := domain.LoadEquipmentConfig("internal/domain/equipment_config.json"); err != nil {
-		log.Fatal(err)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// 2) ActorSystem
-	sys := actor.NewActorSystem()
-	root := sys.Root
+	app := runtime.NewApp()
+	app.Register(configmod.New("internal/domain/config_full.json", "internal/domain/equipment_config.json"))
+	app.Register(actorsmod.New("saves"))
+	app.Register(usermodule.New("saves/users.json"))
+	app.Register(httptransport.New(":8080"))
 
-	// 3) 持久化：JSONRepo + PersistActor
-	repo := persist.NewJSONRepo("saves")
-	persistPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewPersistActor(repo)
-	}))
-
-	schedulerPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewSchedulerActor()
-	}))
-
-	// 4) 设置全局persistPID、schedulerPID
-	gateway.SetPersistPID(persistPID)
-	gateway.SetSchedulerPID(schedulerPID)
-
-	// 5) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
-	gatewayPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewGatewayActor(root, persistPID, schedulerPID)
-	}))
-
-	// 6) HTTP/WS 路由
-	r := gin.Default()
-	// ✅ 加上 CORS 中间件
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
-	gateway.InitRoutes(r, root, gatewayPID)
-
-	log.Println("✅ loaded sequences config, server started :8080")
-	if err := r.Run(":8080"); err != nil {
+	if err := app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }
