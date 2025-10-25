@@ -1,68 +1,55 @@
 package actors
 
 import (
-	"encoding/json"
-	"math/rand"
 	"time"
 
-	"idlemmoserver/internal/domain"
+	gamedomain "idlemmoserver/internal/domain"
 	"idlemmoserver/internal/logx"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/gorilla/websocket"
 )
 
+// PlayerActor 承担玩家会话的协调工作，将消息转交给命令与领域模型处理。
 type PlayerActor struct {
-	playerID         string
-	root             *actor.RootContext
-	conn             *websocket.Conn
-	currentSeq       *actor.PID
-	currentSeqID     string
-	seqLevels        map[string]int
-	inventory        *domain.Inventory
-	equipment        *domain.EquipmentLoadout
-	exp              int64
-	schedulerPID     *actor.PID
-	activeSubProject string
-	isOnline         bool
-	offlineStart     time.Time
-	offlineLimit     time.Duration
-	lastActive       time.Time
-	persistPID       *actor.PID
+	playerID     string
+	root         *actor.RootContext
+	conn         *websocket.Conn
+	currentSeq   *actor.PID
+	schedulerPID *actor.PID
+	persistPID   *actor.PID
+	model        *PlayerModel
+	domain       *PlayerDomain
+	commands     *CommandHandler
 }
 
+// NewPlayerActor 创建一个玩家 Actor，并初始化领域模型与命令分发器。
 func NewPlayerActor(playerID string, root *actor.RootContext, persistPID *actor.PID, schedulerPID *actor.PID) actor.Actor {
 	return &PlayerActor{
 		playerID:     playerID,
 		root:         root,
-		seqLevels:    map[string]int{},
-		inventory:    domain.NewInventory(200),
-		equipment:    domain.NewEquipmentLoadout(),
-		isOnline:     true,
-		offlineLimit: 10 * time.Hour,
-		persistPID:   persistPID,
 		schedulerPID: schedulerPID,
+		persistPID:   persistPID,
+		model:        NewPlayerModel(playerID),
+		domain:       NewPlayerDomain(),
+		commands:     NewCommandHandler(),
 	}
 }
 
-type reqStart struct {
-	Type         string `json:"type"`
-	SeqID        string `json:"seq_id"`
-	Target       int64  `json:"target"`
-	SubProjectID string `json:"sub_project_id"`
-}
-
+// MsgAttachConn 用于 Gateway 告知玩家 Actor 绑定新的 WebSocket 连接。
 type MsgAttachConn struct {
 	Conn         *websocket.Conn
 	RequestState bool
 }
 
+// MsgDetachConn 表示连接主动解除绑定。
 type MsgDetachConn struct{}
 
+// SeqResult 是 SequenceActor 向 PlayerActor 汇报的修炼结算消息。
 type SeqResult struct {
 	Gains        int64
 	Rare         []string
-	Items        []domain.Item
+	Items        []gamedomain.Item
 	SeqID        string
 	Level        int
 	CurExp       int64
@@ -70,12 +57,13 @@ type SeqResult struct {
 	SubProjectID string
 }
 
+// Receive 实现 protoactor-go 的消息收发入口。
 func (p *PlayerActor) Receive(ctx actor.Context) {
 	switch m := ctx.Message().(type) {
 	case *actor.Started:
 		ctx.Send(p.persistPID, &MsgRegisterPlayer{PlayerID: p.playerID, PID: ctx.Self()})
 		ctx.Send(p.persistPID, &MsgLoadPlayer{PlayerID: p.playerID, ReplyTo: ctx.Self()})
-		p.lastActive = time.Now()
+		p.model.LastActive = time.Now()
 
 	case *MsgAttachConn:
 		p.handleAttachConn(m)
@@ -96,25 +84,17 @@ func (p *PlayerActor) Receive(ctx actor.Context) {
 		p.handleSeqResult(ctx, m)
 
 	case *MsgPlayerOffline:
-		p.isOnline = false
-		p.offlineStart = time.Now()
-		logx.Info("player offline", "player", p.playerID, "limit", p.offlineLimit)
+		p.model.MarkOffline(time.Now())
+		logx.Info("player offline", "player", p.playerID, "limit", p.model.OfflineLimit)
 
 	case *MsgPlayerReconnect:
-		p.isOnline = true
 		p.conn = m.Conn
-		p.lastActive = time.Now()
+		p.model.MarkOnline(time.Now())
 		p.sendToClient(map[string]any{"type": "S_ReconnectOK"})
 
 	case *MsgCheckExpire:
-		if !p.isOnline && !p.offlineStart.IsZero() && time.Since(p.offlineStart) > p.offlineLimit {
-			ctx.Send(p.persistPID, &MsgSavePlayer{
-				PlayerID:          p.playerID,
-				SeqLevels:         p.seqLevels,
-				Inventory:         p.inventory,
-				Exp:               p.exp,
-				OfflineLimitHours: int64(p.offlineLimit / time.Hour),
-			})
+		if p.domain.ShouldExpire(p.model, time.Now()) {
+			p.saveSnapshot(ctx)
 			ctx.Send(p.persistPID, &MsgUnregisterPlayer{PlayerID: p.playerID})
 			logx.Warn("player session expired", "player", p.playerID)
 			ctx.Stop(ctx.Self())
@@ -123,16 +103,14 @@ func (p *PlayerActor) Receive(ctx actor.Context) {
 	case *MsgConnClosed:
 		if m.Conn == p.conn {
 			p.conn = nil
-			p.isOnline = false
-			p.offlineStart = time.Now()
+			p.model.MarkOffline(time.Now())
 		}
 
 	case *actor.Terminated:
 		if p.currentSeq != nil && m.Who.Equal(p.currentSeq) {
 			p.currentSeq = nil
-			p.currentSeqID = ""
-			p.activeSubProject = ""
-			if p.isOnline {
+			p.domain.OnSequenceStopped(p.model)
+			if p.model.IsOnline {
 				p.sendToClient(map[string]any{
 					"type":               "S_SeqEnded",
 					"is_running":         false,
@@ -145,457 +123,196 @@ func (p *PlayerActor) Receive(ctx actor.Context) {
 	}
 }
 
+// handleAttachConn 负责绑定新连接、结算离线收益并推送当前状态。
 func (p *PlayerActor) handleAttachConn(msg *MsgAttachConn) {
 	p.conn = msg.Conn
-	p.isOnline = true
-	p.lastActive = time.Now()
+	now := time.Now()
+	p.model.MarkOnline(now)
 
 	logx.Info("收到 MsgAttachConn", "playerID", p.playerID, "requestState", msg.RequestState)
 
 	if msg.RequestState {
-		offlineGain, offlineItems, duration := p.calculateOfflineRewards()
+		offlineGain, offlineItems, duration := p.domain.ApplyOfflineRewards(p.model, now)
 		if offlineGain > 0 || len(offlineItems) > 0 {
-			p.exp += offlineGain
-			for itemID, count := range offlineItems {
-				if err := p.inventory.AddItem(domain.Item{ID: itemID, Name: itemID}, count); err != nil {
-					logx.Warn("offline reward add item failed", "playerID", p.playerID, "itemID", itemID, "count", count, "err", err)
-				}
-			}
 			p.sendToClient(map[string]any{
 				"type":             "S_OfflineReward",
 				"gains":            offlineGain,
 				"offline_duration": int64(duration.Seconds()),
 				"offline_items":    offlineItems,
-				"bag":              p.inventory.List(),
+				"bag":              p.model.Inventory.List(),
 			})
 		}
 
-		payload := p.buildReconnectedPayload()
+		payload := p.domain.BuildReconnectedPayload(p.model, p.currentSeq != nil)
 		logx.Info("发送 S_Reconnected 消息", "playerID", p.playerID, "payload", payload)
 		p.sendToClient(payload)
 	} else {
 		p.sendToClient(map[string]any{"type": "S_Reconnected", "msg": "重连成功"})
 	}
-
-	p.offlineStart = time.Time{}
 }
 
-func (p *PlayerActor) calculateOfflineRewards() (int64, map[string]int64, time.Duration) {
-	if p.offlineStart.IsZero() {
-		return 0, map[string]int64{}, 0
-	}
-	duration := time.Since(p.offlineStart)
-	if duration <= 0 || duration >= p.offlineLimit {
-		return 0, map[string]int64{}, duration
-	}
-
-	gains := int64(0)
-	items := make(map[string]int64)
-	seconds := duration.Seconds()
-
-	for seqID, level := range p.seqLevels {
-		if level <= 0 {
-			continue
-		}
-		cfg, exists := domain.GetSequenceConfig(seqID)
-		if !exists || cfg == nil {
-			continue
-		}
-		interval := cfg.TickInterval
-		if interval <= 0 {
-			interval = 1
-		}
-		ticks := int64(seconds / float64(interval))
-		if ticks <= 0 {
-			continue
-		}
-
-		gain := cfg.BaseGain + int64(float64(level)*cfg.GrowthFactor)
-		gains += gain * ticks
-
-		for _, drop := range cfg.Drops {
-			if drop.DropChance <= 0 {
-				continue
-			}
-			expected := float64(ticks) * drop.DropChance
-			guaranteed := int64(expected)
-			remainder := expected - float64(guaranteed)
-			count := guaranteed
-			if rand.Float64() < remainder {
-				count++
-			}
-			if count > 0 {
-				items[drop.ID] += count
-			}
-		}
-	}
-
-	return gains, items, duration
-}
-
-func (p *PlayerActor) buildReconnectedPayload() map[string]any {
-	return map[string]any{
-		"type":               "S_Reconnected",
-		"msg":                "重连成功",
-		"seq_id":             p.getCurrentSeqID(),
-		"seq_level":          p.getCurrentSeqLevel(),
-		"exp":                p.exp,
-		"bag":                p.inventory.List(),
-		"is_running":         p.currentSeq != nil,
-		"seq_levels":         p.seqLevels,
-		"equipment":          p.equipment.Export(),
-		"equipment_bonus":    p.equipment.TotalBonus(),
-		"active_sub_project": p.activeSubProject,
-		// 装备配置现在在前端本地处理，不需要传输
-	}
-}
-
+// handleLoadResult 将持久化层返回的数据转换为领域模型状态。
 func (p *PlayerActor) handleLoadResult(m *MsgLoadResult) {
 	if m.Err != nil || m.Data == nil {
-		// 新玩家：为所有序列设置默认等级 1
-		p.seqLevels = make(map[string]int)
-		for seqID := range domain.Sequences {
-			p.seqLevels[seqID] = 1 // 默认等级为 1
-		}
-
+		p.domain.InitNewPlayer(p.model)
 		p.sendToClient(map[string]any{"type": "S_NewPlayer"})
 		return
 	}
 
-	p.seqLevels = m.Data.SeqLevels
-	for id, cnt := range m.Data.Inventory {
-		_ = p.inventory.AddItem(domain.Item{ID: id, Name: id}, cnt)
-	}
-	p.exp = m.Data.Exp
-	if m.Data.Equipment != nil {
-		p.equipment.ImportState(m.Data.Equipment)
-	}
-	if m.Data.OfflineLimitHours > 0 {
-		p.offlineLimit = time.Duration(m.Data.OfflineLimitHours) * time.Hour
-	}
-
+	p.domain.ApplyLoadedData(p.model, m.Data)
 	p.sendToClient(map[string]any{
 		"type":                "S_LoadOK",
-		"exp":                 p.exp,
-		"bag":                 p.inventory.List(),
-		"offline_limit_hours": m.Data.OfflineLimitHours,
-		"equipment":           p.equipment.Export(),
-		"equipment_bonus":     p.equipment.TotalBonus(),
+		"exp":                 p.model.Exp,
+		"bag":                 p.model.Inventory.List(),
+		"offline_limit_hours": p.model.OfflineLimitHours(),
+		"equipment":           p.model.Equipment.Export(),
+		"equipment_bonus":     p.model.Equipment.TotalBonus(),
 	})
 }
 
+// handleClientPayload 将客户端数据交给命令处理器执行。
 func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload) {
 	p.conn = m.Conn
-	p.isOnline = true
-	p.lastActive = time.Now()
+	p.model.MarkOnline(time.Now())
 
-	var b baseMsg
-	_ = json.Unmarshal(m.Raw, &b)
-
-	switch b.Type {
-	case "C_Login":
-		p.sendToClient(map[string]any{
-			"type":            "S_LoginOK",
-			"msg":             "登录成功",
-			"playerId":        p.playerID,
-			"exp":             p.exp,
-			"seq_levels":      p.seqLevels,
-			"bag":             p.inventory.List(),
-			"equipment":       p.equipment.Export(),
-			"equipment_bonus": p.equipment.TotalBonus(),
-			"is_running":      p.currentSeq != nil,
-			"seq_id":          p.currentSeqID,
-			"seq_level": func() int {
-				if p.currentSeqID != "" {
-					return p.seqLevels[p.currentSeqID]
-				}
-				return 0
-			}(),
-			"active_sub_project": p.activeSubProject,
-		})
-
-	case "C_StartSeq":
-		p.handleStartSequence(ctx, m.Raw)
-
-	// 配置现在在前端本地处理，不需要传输
-
-	case "C_StopSeq":
-		if p.currentSeq != nil {
-			ctx.Stop(p.currentSeq)
-			p.currentSeq = nil
-			p.currentSeqID = ""
-			p.activeSubProject = ""
-			p.sendToClient(map[string]any{
-				"type":               "S_SeqEnded",
-				"is_running":         false,
-				"seq_id":             "",
-				"seq_level":          0,
-				"active_sub_project": "",
-			})
-		}
-
-	case "C_ListBag":
-		p.sendToClient(map[string]any{"type": "S_BagInfo", "bag": p.inventory.List()})
-
-	// 装备配置现在在前端本地处理，但装备状态仍需要传输
-	case "C_ListEquipment":
-		p.sendEquipmentState(false) // 不包含装备目录，只包含状态
-
-	case "C_EquipItem":
-		p.handleEquipItem(ctx, m.Raw)
-
-	case "C_UnequipItem":
-		p.handleUnequipItem(ctx, m.Raw)
-
-	case "C_UseItem":
-		var req struct {
-			ItemID string `json:"item_id"`
-			Count  int64  `json:"count"`
-		}
-		_ = json.Unmarshal(m.Raw, &req)
-		if req.Count <= 0 {
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": "invalid count"})
-			return
-		}
-		if err := p.inventory.RemoveItem(req.ItemID, req.Count); err != nil {
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": err.Error()})
-			return
-		}
-		p.exp += req.Count * 10
-		p.sendToClient(map[string]any{
-			"type":    "S_ItemUsed",
-			"item_id": req.ItemID,
-			"count":   req.Count,
-			"effect":  "exp+10",
-			"exp":     p.exp,
-		})
-
-	case "C_RemoveItem":
-		var req struct {
-			ItemID string `json:"item_id"`
-			Count  int64  `json:"count"`
-		}
-		_ = json.Unmarshal(m.Raw, &req)
-		if err := p.inventory.RemoveItem(req.ItemID, req.Count); err != nil {
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": err.Error()})
-		} else {
-			p.sendToClient(map[string]any{"type": "S_ItemRemoved", "item_id": req.ItemID, "count": req.Count})
-		}
+	if err := p.commands.Handle(ctx, p, m); err != nil {
+		logx.Warn("command execute failed", "player", p.playerID, "err", err)
+		p.sendError(err.Error())
 	}
 }
 
-func (p *PlayerActor) handleStartSequence(ctx actor.Context, raw []byte) {
-	var req reqStart
-	_ = json.Unmarshal(raw, &req)
-
-	// 如果当前有运行的序列，自动停止它（支持无缝切换）
-	if p.currentSeq != nil {
-		ctx.Stop(p.currentSeq)
-		p.currentSeq = nil
-		p.currentSeqID = ""
-		p.activeSubProject = ""
-		// 注意：这里不发送 S_SeqEnded，因为马上会发送 S_SeqStarted
-	}
-
-	cfg, exists := domain.GetSequenceConfig(req.SeqID)
-	if !exists {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "sequence not found"})
-		return
-	}
-
-	level := p.seqLevels[req.SeqID]
-	var subProject *domain.SequenceSubProject
-	if req.SubProjectID != "" {
-		sp, ok := cfg.GetSubProject(req.SubProjectID)
-		if !ok {
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": "sub project not found"})
-			return
-		}
-		if level < sp.UnlockLevel {
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": "子项目未解锁"})
-			return
-		}
-		subProject = sp
-	}
-
-	bonus := p.equipment.TotalBonus()
-	pid := ctx.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return NewSequenceActor(p.playerID, req.SeqID, level, ctx.Self(), p.schedulerPID, subProject, bonus)
-	}))
-	ctx.Watch(pid)
-	p.currentSeq = pid
-	p.currentSeqID = req.SeqID
-	if subProject != nil {
-		p.activeSubProject = subProject.ID
-	} else {
-		p.activeSubProject = ""
-	}
-
-	interval := cfg.EffectiveInterval(subProject)
-	p.sendToClient(map[string]any{
-		"type":            "S_SeqStarted",
-		"seq_id":          req.SeqID,
-		"level":           level,
-		"sub_project_id":  p.activeSubProject,
-		"tick_interval":   interval.Seconds(),
-		"equipment_bonus": bonus,
-	})
-}
-
+// handleSeqResult 处理修炼结算结果并进行持久化。
 func (p *PlayerActor) handleSeqResult(ctx actor.Context, m *SeqResult) {
-	logx.Info("Player received SeqResult", "playerID", p.playerID, "seqID", m.SeqID, "gains", m.Gains, "items", len(m.Items), "isOnline", p.isOnline)
+	logx.Info("Player received SeqResult", "playerID", p.playerID, "seqID", m.SeqID, "gains", m.Gains, "items", len(m.Items), "isOnline", p.model.IsOnline)
 
-	for _, it := range m.Items {
-		if err := p.inventory.AddItem(it, 1); err != nil {
-			logx.Error("Failed to add item", "itemID", it.ID, "error", err)
-		}
-	}
-
-	if m.SeqID != "" {
-		p.seqLevels[m.SeqID] = m.Level
-	}
-	p.activeSubProject = m.SubProjectID
-	p.exp += m.Gains
-
-	currentBag := p.inventory.List()
-	if p.isOnline && p.conn != nil {
+	bagSnapshot := p.domain.ApplySequenceResult(p.model, m)
+	if p.model.IsOnline && p.conn != nil {
 		p.sendToClient(map[string]any{
 			"type":            "S_SeqResult",
 			"gains":           m.Gains,
 			"rare":            m.Rare,
-			"bag":             currentBag,
+			"bag":             bagSnapshot,
 			"seq_id":          m.SeqID,
 			"level":           m.Level,
 			"cur_exp":         m.CurExp,
 			"leveled":         m.Leveled,
 			"items":           m.Items,
 			"sub_project_id":  m.SubProjectID,
-			"equipment_bonus": p.equipment.TotalBonus(),
+			"equipment_bonus": p.model.Equipment.TotalBonus(),
 		})
 	}
 
+	p.saveSnapshot(ctx)
+}
+
+// startSequence 校验并启动新的修炼序列。
+func (p *PlayerActor) startSequence(ctx actor.Context, seqID, subProjectID string) error {
+	if p.currentSeq != nil {
+		p.stopCurrentSequence(ctx, false)
+	}
+
+	cfg, subProject, level, err := p.domain.PrepareSequenceStart(p.model, seqID, subProjectID)
+	if err != nil {
+		return err
+	}
+
+	bonus := p.model.Equipment.TotalBonus()
+	pid := ctx.Spawn(actor.PropsFromProducer(func() actor.Actor {
+		return NewSequenceActor(p.playerID, seqID, level, ctx.Self(), p.schedulerPID, subProject, bonus)
+	}))
+	ctx.Watch(pid)
+	p.currentSeq = pid
+	p.domain.OnSequenceStarted(p.model, seqID, subProject)
+
+	interval := cfg.EffectiveInterval(subProject)
+	p.sendToClient(map[string]any{
+		"type":            "S_SeqStarted",
+		"seq_id":          seqID,
+		"level":           level,
+		"sub_project_id":  p.model.ActiveSubProject,
+		"tick_interval":   interval.Seconds(),
+		"equipment_bonus": bonus,
+	})
+	return nil
+}
+
+// stopCurrentSequence 停止当前修炼，并视情况通知客户端。
+func (p *PlayerActor) stopCurrentSequence(ctx actor.Context, notify bool) {
+	if p.currentSeq == nil {
+		return
+	}
+	ctx.Stop(p.currentSeq)
+	p.currentSeq = nil
+	p.domain.OnSequenceStopped(p.model)
+	if notify && p.model.IsOnline {
+		p.sendToClient(map[string]any{
+			"type":               "S_SeqEnded",
+			"is_running":         false,
+			"seq_id":             "",
+			"seq_level":          0,
+			"active_sub_project": "",
+		})
+	}
+}
+
+// saveSnapshot 向持久化层发送保存请求。
+func (p *PlayerActor) saveSnapshot(ctx actor.Context) {
 	ctx.Send(p.persistPID, &MsgSavePlayer{
 		PlayerID:          p.playerID,
-		SeqLevels:         p.seqLevels,
-		Inventory:         p.inventory,
-		Exp:               p.exp,
-		Equipment:         p.equipment.ExportState(),
-		OfflineLimitHours: int64(p.offlineLimit / time.Hour),
+		SeqLevels:         p.model.SeqLevels,
+		Inventory:         p.model.Inventory,
+		Exp:               p.model.Exp,
+		Equipment:         p.model.Equipment.ExportState(),
+		OfflineLimitHours: p.model.OfflineLimitHours(),
 	})
 }
 
-func (p *PlayerActor) handleEquipItem(ctx actor.Context, raw []byte) {
-	var req struct {
-		ItemID      string `json:"item_id"`
-		Enhancement int    `json:"enhancement"`
+// pushEquipmentBonus 在装备变化或新序列开启时同步装备加成给 SequenceActor。
+func (p *PlayerActor) pushEquipmentBonus(ctx actor.Context) {
+	if p.currentSeq != nil {
+		ctx.Send(p.currentSeq, &MsgUpdateEquipmentBonus{Bonus: p.model.Equipment.TotalBonus()})
 	}
-	_ = json.Unmarshal(raw, &req)
-	if req.ItemID == "" {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "请选择要装备的物品"})
-		return
-	}
-
-	def, ok := domain.GetEquipmentDefinition(req.ItemID)
-	if !ok {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "该物品无法装备"})
-		return
-	}
-
-	if err := p.inventory.RemoveItem(req.ItemID, 1); err != nil {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": err.Error()})
-		return
-	}
-
-	replaced := p.equipment.Equip(def, req.Enhancement)
-	if replaced != nil {
-		if err := p.inventory.AddItem(domain.Item{ID: replaced.Definition.ID, Name: replaced.Definition.Name}, 1); err != nil {
-			p.equipment.Equip(replaced.Definition, replaced.Enhancement)
-			_ = p.inventory.AddItem(domain.Item{ID: def.ID, Name: def.Name}, 1)
-			p.sendToClient(map[string]any{"type": "S_Error", "msg": "背包空间不足"})
-			return
-		}
-	}
-
-	logx.Info("equip item", "player", p.playerID, "item", def.ID)
-	p.pushEquipmentBonus(ctx)
-	p.sendEquipmentChanged()
 }
 
-func (p *PlayerActor) handleUnequipItem(ctx actor.Context, raw []byte) {
-	var req struct {
-		Slot string `json:"slot"`
-	}
-	_ = json.Unmarshal(raw, &req)
-	if req.Slot == "" {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "请选择要卸下的位置"})
-		return
-	}
-
-	slot := domain.EquipmentSlot(req.Slot)
-	item := p.equipment.Unequip(slot)
-	if item == nil {
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "该位置没有装备"})
-		return
-	}
-
-	if err := p.inventory.AddItem(domain.Item{ID: item.Definition.ID, Name: item.Definition.Name}, 1); err != nil {
-		p.equipment.Equip(item.Definition, item.Enhancement)
-		p.sendToClient(map[string]any{"type": "S_Error", "msg": "背包空间不足"})
-		return
-	}
-
-	logx.Info("unequip item", "player", p.playerID, "slot", slot)
-	p.pushEquipmentBonus(ctx)
-	p.sendEquipmentChanged()
-}
-
+// sendEquipmentState 向客户端发送当前装备信息，可选包含装备目录。
 func (p *PlayerActor) sendEquipmentState(includeCatalog bool) {
 	payload := map[string]any{
 		"type":      "S_EquipmentState",
-		"equipment": p.equipment.Export(),
-		"bonus":     p.equipment.TotalBonus(),
-		"bag":       p.inventory.List(),
+		"equipment": p.model.Equipment.Export(),
+		"bonus":     p.model.Equipment.TotalBonus(),
+		"bag":       p.model.Inventory.List(),
 	}
 	if includeCatalog {
-		payload["catalog"] = domain.GetEquipmentCatalogSummary()
+		payload["catalog"] = gamedomain.GetEquipmentCatalogSummary()
 	}
 	p.sendToClient(payload)
 }
 
+// sendEquipmentChanged 将装备变化通知客户端。
 func (p *PlayerActor) sendEquipmentChanged() {
 	p.sendToClient(map[string]any{
 		"type":      "S_EquipmentChanged",
-		"equipment": p.equipment.Export(),
-		"bonus":     p.equipment.TotalBonus(),
-		"bag":       p.inventory.List(),
+		"equipment": p.model.Equipment.Export(),
+		"bonus":     p.model.Equipment.TotalBonus(),
+		"bag":       p.model.Inventory.List(),
 	})
 }
 
-func (p *PlayerActor) pushEquipmentBonus(ctx actor.Context) {
-	if p.currentSeq != nil {
-		ctx.Send(p.currentSeq, &MsgUpdateEquipmentBonus{Bonus: p.equipment.TotalBonus()})
-	}
-}
-
+// send 将任意结构体写入 WebSocket。
 func (p *PlayerActor) send(v any) {
 	if p.conn != nil {
 		_ = p.conn.WriteJSON(v)
 	}
 }
 
+// sendToClient 在玩家在线时推送消息，否则忽略。
 func (p *PlayerActor) sendToClient(v any) {
-	if p.isOnline && p.conn != nil {
+	if p.model.IsOnline && p.conn != nil {
 		_ = p.conn.WriteJSON(v)
 	}
 }
 
-func (p *PlayerActor) getCurrentSeqID() string {
-	return p.currentSeqID
-}
-
-func (p *PlayerActor) getCurrentSeqLevel() int {
-	if p.currentSeqID != "" {
-		return p.seqLevels[p.currentSeqID]
-	}
-	return 0
+// sendError 用统一格式返回错误消息。
+func (p *PlayerActor) sendError(msg string) {
+	p.sendToClient(map[string]any{"type": "S_Error", "msg": msg})
 }
