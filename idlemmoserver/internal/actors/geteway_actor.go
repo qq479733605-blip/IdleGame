@@ -11,14 +11,16 @@ import (
 type GatewayActor struct {
 	root       *actor.RootContext
 	persistPID *actor.PID
+	scheduler  *actor.PID
 	players    sync.Map // playerID -> *actor.PID（长存）
 }
 
 // NewGatewayActor 创建GatewayActor
-func NewGatewayActor(root *actor.RootContext, persistPID *actor.PID) *GatewayActor {
+func NewGatewayActor(root *actor.RootContext, persistPID *actor.PID, scheduler *actor.PID) *GatewayActor {
 	return &GatewayActor{
 		root:       root,
 		persistPID: persistPID,
+		scheduler:  scheduler,
 	}
 }
 
@@ -76,7 +78,7 @@ func (g *GatewayActor) ensurePlayerActor(ctx actor.Context, playerID string) *ac
 
 	// 创建新的PlayerActor
 	props := actor.PropsFromProducer(func() actor.Actor {
-		return NewPlayerActor(playerID, g.root, g.persistPID)
+		return NewPlayerActor(playerID, g.root, g.persistPID, g.scheduler)
 	})
 	pid := ctx.Spawn(props)
 	g.players.Store(playerID, pid)

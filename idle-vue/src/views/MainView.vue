@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import { useUserStore } from "../store/user";
 
 const user = useUserStore();
@@ -7,6 +7,7 @@ const ws = ref(null);
 
 const sequences = ref([]);
 const selectedSeq = ref("");
+const selectedSubProject = ref("");
 const bag = ref({});
 const gains = ref(0);
 const isRunning = ref(false);
@@ -16,24 +17,113 @@ const playerExp = ref(0);
 const currentSeqLevel = ref(1);
 const currentSeqExp = ref(0);
 const seqProgress = ref(0);
-const seqInterval = ref(3); // 默认3秒
+const seqInterval = ref(3);
 const progressTimer = ref(null);
-const itemNotifications = ref([]); // 物品获得通知
+const itemNotifications = ref([]);
 const notificationId = ref(0);
-const showOfflineReward = ref(false); // 离线收益弹窗
-const offlineRewardData = ref(null); // 离线收益数据
-const showSeqReward = ref(false); // 序列结算弹窗
-const seqRewardData = ref(null); // 序列结算数据
-const seqLevels = ref({}); // 存储所有序列的等级信息
-const isLoading = ref(true); // 加载状态
-const showLoginScreen = ref(true); // 登录界面状态
+const showOfflineReward = ref(false);
+const offlineRewardData = ref(null);
+const showSeqReward = ref(false);
+const seqRewardData = ref(null);
+const seqLevels = ref({});
+const equipmentSlots = ref({});
+const equipmentBonus = ref({ gain_multiplier: 0, rare_chance_bonus: 0, exp_multiplier: 0 });
+const equipmentCatalog = ref({});
+const activeSubProject = ref("");
+const isLoading = ref(true);
+const showLoginScreen = ref(true);
+
+const equipmentSlotOrder = ["weapon", "armor", "head", "hand", "foot", "relic"];
+const equipmentSlotName = {
+  weapon: "主手武器",
+  armor: "护体防具",
+  head: "头部饰品",
+  hand: "手部灵器",
+  foot: "灵行之靴",
+  relic: "法宝护符"
+};
+
+const defaultBonus = { gain_multiplier: 0, rare_chance_bonus: 0, exp_multiplier: 0 };
+
+const cultivationRealm = computed(() => {
+  const realms = [
+    { level: 1, name: "凡人", desc: "芸芸众生，开始修仙之路" },
+    { level: 5, name: "炼气", desc: "初窥门径，引气入体" },
+    { level: 10, name: "筑基", desc: "筑下道基，真正的修仙者" },
+    { level: 20, name: "金丹", desc: "凝结金丹，大道可期" },
+    { level: 30, name: "元婴", desc: "元神出窍，逍遥天地" }
+  ];
+
+  for (let i = realms.length - 1; i >= 0; i--) {
+    if (playerLevel.value >= realms[i].level) {
+      return realms[i];
+    }
+  }
+  return realms[0];
+});
+
+const selectedSequence = computed(() => sequences.value.find((s) => s.id === selectedSeq.value) || null);
+const availableSubProjects = computed(() => {
+  const seq = selectedSequence.value;
+  if (!seq || !seq.sub_projects) return [];
+  const level = getSequenceLevel(seq.id);
+  return seq.sub_projects
+    .map((sp) => ({
+      ...sp,
+      unlocked: level >= (sp.unlock_level || 0)
+    }))
+    .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+});
+
+const selectedSubProjectDetail = computed(() => {
+  const seq = selectedSequence.value;
+  if (!seq || !seq.sub_projects) return null;
+  return seq.sub_projects.find((sp) => sp.id === selectedSubProject.value) || null;
+});
+
+const formattedEquipmentBonus = computed(() => ({
+  gain: Math.round(((equipmentBonus.value?.gain_multiplier) || 0) * 100),
+  rare: Math.round(((equipmentBonus.value?.rare_chance_bonus) || 0) * 100),
+  exp: Math.round(((equipmentBonus.value?.exp_multiplier) || 0) * 100)
+}));
+
+const equippableItems = computed(() => {
+  const catalog = equipmentCatalog.value || {};
+  const bagItems = bag.value || {};
+  return Object.entries(bagItems)
+    .filter(([id]) => catalog[id])
+    .map(([id, count]) => ({
+      id,
+      count,
+      name: catalog[id].name || getItemName(id),
+      slot: catalog[id].slot,
+      quality: catalog[id].quality,
+      icon: getItemIcon(id)
+    }))
+    .sort((a, b) => {
+      const slotDiff = (a.slot || "").localeCompare(b.slot || "");
+      return slotDiff !== 0 ? slotDiff : a.name.localeCompare(b.name);
+    });
+});
+
+const currentSequenceInterval = computed(() => getSequenceInterval(selectedSeq.value, selectedSubProject.value));
+
+const inventoryEntries = computed(() =>
+  Object.entries(bag.value || {})
+    .map(([id, count]) => ({ id, count }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+);
 
 onMounted(() => {
-  // 显示加载动画
   setTimeout(() => {
     isLoading.value = false;
     connectWS();
   }, 2000);
+});
+
+watch(selectedSeq, (newSeq) => {
+  if (!newSeq) return;
+  autoSelectSubProject(newSeq);
 });
 
 function connectWS() {
@@ -42,6 +132,7 @@ function connectWS() {
   ws.value.onopen = () => {
     logs.value.push("🌟 仙缘已定，开始你的修仙之旅！");
     ws.value.send(JSON.stringify({ type: "C_ListSeq" }));
+    ws.value.send(JSON.stringify({ type: "C_ListEquipment" }));
   };
 
   ws.value.onmessage = (event) => {
@@ -52,94 +143,111 @@ function connectWS() {
         logs.value.push(`🎊 ${user.username}道友，欢迎重返仙途！`);
         break;
       case "S_Reconnected":
-        // 重连状态恢复
-        console.log("收到 S_Reconnected 消息:", msg);
         logs.value.push(`🔄 ${msg.msg || "重连成功"}`);
-
-        // 恢复玩家状态
         playerExp.value = msg.exp || 0;
         bag.value = msg.bag || {};
-
-        // 保存重连状态，等待序列列表加载后再处理序列恢复
-        if (msg.seq_id && msg.seq_level > 0) {
-          // 将重连状态保存到一个临时变量
+        equipmentSlots.value = msg.equipment || {};
+        equipmentBonus.value = msg.equipment_bonus || defaultBonus;
+        if (msg.equipment_catalog) {
+          equipmentCatalog.value = msg.equipment_catalog;
+        }
+        if (msg.seq_levels) {
+          seqLevels.value = msg.seq_levels;
+        }
+        activeSubProject.value = msg.active_sub_project || "";
+        if (msg.seq_id && msg.seq_level !== undefined) {
           window.pendingReconnectionState = {
             seq_id: msg.seq_id,
             seq_level: msg.seq_level,
-            is_running: msg.is_running
+            is_running: msg.is_running,
+            sub_project_id: msg.active_sub_project || ""
           };
-
           selectedSeq.value = msg.seq_id;
           currentSeqLevel.value = msg.seq_level;
-
-          // 更新序列等级信息
-          if (msg.seq_levels) {
-            seqLevels.value = msg.seq_levels;
-          } else {
-            seqLevels.value[msg.seq_id] = msg.seq_level;
-          }
-
-          // 如果序列正在运行，先设置运行状态，但延迟序列查找
           if (msg.is_running) {
             isRunning.value = true;
-            // 尝试立即恢复进度条（如果序列已加载）
-            tryRestoreSequenceProgress();
           } else {
             isRunning.value = false;
-            stopProgressTimer(); // 确保停止进度条
+            stopProgressTimer();
           }
         } else {
-          // 没有序列在运行，确保状态正确
           isRunning.value = false;
           stopProgressTimer();
         }
         break;
       case "S_OfflineReward":
-        // 显示离线收益弹窗
         offlineRewardData.value = {
           gains: msg.gains || 0,
           duration: msg.offline_duration || 0,
           items: msg.offline_items || {}
         };
+        if (msg.bag) {
+          bag.value = msg.bag;
+        }
         showOfflineReward.value = true;
         break;
       case "S_ListSeq":
-        sequences.value = msg.sequences;
-
-        // 检查是否有待处理的重连状态需要恢复
+        sequences.value = msg.sequences || [];
+        if (msg.equipment_catalog) {
+          equipmentCatalog.value = msg.equipment_catalog;
+        }
         if (window.pendingReconnectionState) {
           handlePendingReconnection();
-        } else if (sequences.value.length > 0) {
-          // 只在没有重连状态时才默认选择第一个序列
+        } else if (!selectedSeq.value && sequences.value.length > 0) {
           selectedSeq.value = sequences.value[0].id;
         }
+        if (selectedSeq.value) {
+          autoSelectSubProject(selectedSeq.value);
+        }
+        break;
+      case "S_LoadOK":
+        playerExp.value = msg.exp || 0;
+        bag.value = msg.bag || {};
+        equipmentSlots.value = msg.equipment || {};
+        equipmentBonus.value = msg.equipment_bonus || defaultBonus;
+        break;
+      case "S_SeqStarted":
+        isRunning.value = true;
+        currentSeqLevel.value = msg.level || 1;
+        if (msg.seq_id && msg.level !== undefined) {
+          seqLevels.value[msg.seq_id] = msg.level;
+        }
+        if (msg.equipment_bonus) {
+          equipmentBonus.value = msg.equipment_bonus;
+        }
+        activeSubProject.value = msg.sub_project_id || "";
+        if (msg.sub_project_id) {
+          selectedSubProject.value = msg.sub_project_id;
+        }
+        seqInterval.value = msg.tick_interval || getSequenceInterval(msg.seq_id, msg.sub_project_id);
+        startProgressTimer();
+        logs.value.push(`🎯 开始${getSequenceName(msg.seq_id)}${formatSubProjectLabel(msg.sub_project_id)} - 当前境界：${currentSeqLevel.value}重`);
         break;
       case "S_SeqResult":
         gains.value += msg.gains || 0;
         bag.value = msg.bag || {};
-
         if (msg.level && msg.seq_id === selectedSeq.value) {
           currentSeqLevel.value = msg.level;
           currentSeqExp.value = msg.cur_exp || 0;
         }
-
-        // 更新序列等级信息
         if (msg.seq_id && msg.level) {
           seqLevels.value[msg.seq_id] = msg.level;
         }
-
+        if (msg.equipment_bonus) {
+          equipmentBonus.value = msg.equipment_bonus;
+        }
+        if (msg.sub_project_id) {
+          activeSubProject.value = msg.sub_project_id;
+        }
         if (msg.rare && msg.rare.length > 0) {
           logs.value.push(`🌟 神秘书籍：${msg.rare.join(", ")}`);
         }
-
         if (msg.gains > 0) {
           logs.value.push(`💫 获得${msg.gains}点灵气`);
         }
-
-        // 处理序列结算弹窗数据
         const newItems = {};
         if (msg.items && msg.items.length > 0) {
-          msg.items.forEach(item => {
+          msg.items.forEach((item) => {
             const itemId = item.id;
             if (newItems[itemId]) {
               newItems[itemId].count++;
@@ -153,42 +261,45 @@ function connectWS() {
             }
           });
         }
-
-        // 显示序列结算弹窗（如果有收益或物品）
-        if (msg.gains > 0 || Object.keys(newItems).length > 0) {
+        if (msg.gains > 0 || Object.keys(newItems).length > 0 || (msg.rare && msg.rare.length > 0)) {
           seqRewardData.value = {
             gains: msg.gains || 0,
             items: Object.values(newItems),
-            sequenceName: getSequenceName(msg.seq_id),
+            sequenceName: `${getSequenceName(msg.seq_id)}${formatSubProjectLabel(msg.sub_project_id)}`,
             rare: msg.rare || []
           };
           showSeqReward.value = true;
-
-          // 2秒后自动隐藏弹窗
           setTimeout(() => {
             showSeqReward.value = false;
           }, 2000);
         }
-
-        // 保持原有的物品通知功能
-        Object.values(newItems).forEach(item => {
+        Object.values(newItems).forEach((item) => {
           addItemNotification(item);
         });
         break;
-      case "S_SeqStarted":
-        isRunning.value = true;
-        currentSeqLevel.value = msg.level || 1;
-
-        // 更新序列等级信息
-        if (msg.seq_id && msg.level) {
-          seqLevels.value[msg.seq_id] = msg.level;
-        }
-
-        logs.value.push(`🎯 开始${getSequenceName(msg.seq_id)} - 当前境界：${currentSeqLevel.value}重`);
-        break;
       case "S_SeqEnded":
         isRunning.value = false;
+        activeSubProject.value = "";
+        stopProgressTimer();
         logs.value.push("⏸️ 暂停修炼，道法自然");
+        break;
+      case "S_EquipmentState":
+        equipmentSlots.value = msg.equipment || {};
+        equipmentBonus.value = msg.bonus || defaultBonus;
+        if (msg.catalog) {
+          equipmentCatalog.value = msg.catalog;
+        }
+        if (msg.bag) {
+          bag.value = msg.bag;
+        }
+        break;
+      case "S_EquipmentChanged":
+        equipmentSlots.value = msg.equipment || {};
+        equipmentBonus.value = msg.bonus || defaultBonus;
+        if (msg.bag) {
+          bag.value = msg.bag;
+        }
+        logs.value.push("🛡️ 装备状态已更新");
         break;
       default:
         console.log("Unhandled:", msg);
@@ -201,104 +312,75 @@ function connectWS() {
   };
 }
 
-function startSeq() {
-  if (isRunning.value || !selectedSeq.value) return;
-
-  // 获取选中序列的间隔时间
-  const selectedSeqData = sequences.value.find(s => s.id === selectedSeq.value);
-  if (selectedSeqData) {
-    // 这里需要从后端获取实际的tick_interval，先用映射
-    const intervalMap = {
-      'meditation': 3,
-      'herb_gathering': 4,
-      'mining': 4,
-      'alchemy': 5,
-      'weapon_crafting': 6,
-      'talisman_making': 4,
-      'spirit_beast_taming': 5,
-      'array_mastery': 6,
-      'sword_practice': 4
-    };
-    seqInterval.value = intervalMap[selectedSeq.value] || 3;
-    startProgressTimer();
+function autoSelectSubProject(seqId) {
+  const seq = sequences.value.find((s) => s.id === seqId);
+  if (!seq || !seq.sub_projects) {
+    selectedSubProject.value = "";
+    return;
   }
-
-  ws.value.send(JSON.stringify({ type: "C_StartSeq", seq_id: selectedSeq.value, target: 100 }));
-}
-
-function startProgressTimer() {
-  seqProgress.value = 0;
-  clearInterval(progressTimer.value);
-
-  progressTimer.value = setInterval(() => {
-    seqProgress.value += (100 / (seqInterval.value * 10)); // 每100ms增加进度
-    if (seqProgress.value >= 100) {
-      seqProgress.value = 0; // 重置进度，等待后端结算
-    }
-  }, 100);
-}
-
-function stopProgressTimer() {
-  clearInterval(progressTimer.value);
-  seqProgress.value = 0;
-}
-
-// 尝试恢复序列进度（如果序列列表已加载）
-function tryRestoreSequenceProgress() {
-  if (!window.pendingReconnectionState) return;
-
-  const pendingState = window.pendingReconnectionState;
-  const seq = sequences.value.find(s => s.id === pendingState.seq_id);
-
-  if (seq) {
-    // 序列列表已加载，可以立即恢复
-    restoreSequenceProgress(seq, pendingState);
-    // 清除待处理状态
-    window.pendingReconnectionState = null;
+  const level = getSequenceLevel(seqId);
+  if (activeSubProject.value && seq.sub_projects.find((sp) => sp.id === activeSubProject.value)) {
+    selectedSubProject.value = activeSubProject.value;
+    return;
   }
-  // 如果序列还没加载，等待 S_ListSeq 消息处理时再恢复
+  const unlocked = seq.sub_projects
+    .filter((sp) => level >= (sp.unlock_level || 0))
+    .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+  if (unlocked.length > 0) {
+    selectedSubProject.value = unlocked[unlocked.length - 1].id;
+  } else {
+    selectedSubProject.value = seq.sub_projects[0].id;
+  }
 }
 
-// 处理待处理的重连状态（在 S_ListSeq 后调用）
+function selectSubProject(sp) {
+  if (!sp) return;
+  if (!sp.unlocked) {
+    logs.value.push(`🔒 ${sp.name} 需要达到 ${sp.unlock_level} 重境界`);
+    return;
+  }
+  selectedSubProject.value = sp.id;
+}
+
 function handlePendingReconnection() {
   if (!window.pendingReconnectionState) return;
-
-  const pendingState = window.pendingReconnectionState;
-  const seq = sequences.value.find(s => s.id === pendingState.seq_id);
-
+  const pending = window.pendingReconnectionState;
+  const seq = sequences.value.find((s) => s.id === pending.seq_id);
   if (seq) {
-    // 确保选中正确的序列
-    selectedSeq.value = pendingState.seq_id;
-
-    if (pendingState.is_running) {
-      restoreSequenceProgress(seq, pendingState);
+    selectedSeq.value = pending.seq_id;
+    currentSeqLevel.value = pending.seq_level;
+    activeSubProject.value = pending.sub_project_id || "";
+    autoSelectSubProject(pending.seq_id);
+    if (pending.is_running) {
+      isRunning.value = true;
+      tryRestoreSequenceProgress();
     } else {
-      // 如果序列没有在运行，确保停止进度条
       isRunning.value = false;
       stopProgressTimer();
     }
-    // 清除待处理状态
-    window.pendingReconnectionState = null;
-  } else {
-    // 如果找不到序列，重置状态
-    console.warn(`重连时找不到序列: ${pendingState.seq_id}，重置为默认序列`);
-    if (sequences.value.length > 0) {
-      selectedSeq.value = sequences.value[0].id;
-    }
-    isRunning.value = false;
-    stopProgressTimer();
+  }
+  window.pendingReconnectionState = null;
+}
+
+function tryRestoreSequenceProgress() {
+  if (!window.pendingReconnectionState) return;
+  const pending = window.pendingReconnectionState;
+  const seq = sequences.value.find((s) => s.id === pending.seq_id);
+  if (seq) {
+    restoreSequenceProgress(seq, pending);
     window.pendingReconnectionState = null;
   }
 }
 
-// 恢复序列进度的具体逻辑
 function restoreSequenceProgress(seq, pendingState) {
-  seqInterval.value = getSequenceInterval(seq.id); // 使用现有函数获取间隔
-  seqProgress.value = Math.random() * 80; // 0-80%的随机进度
+  activeSubProject.value = pendingState.sub_project_id || "";
+  if (pendingState.sub_project_id) {
+    selectedSubProject.value = pendingState.sub_project_id;
+  }
+  seqInterval.value = getSequenceInterval(seq.id, pendingState.sub_project_id);
+  seqProgress.value = Math.random() * 80;
   startProgressTimer();
-  logs.value.push(`♻️ 恢复修炼：${seq.name}，进度${Math.round(seqProgress.value)}%`);
-
-  // 显示重连恢复提示
+  logs.value.push(`♻️ 恢复修炼：${seq.name}${formatSubProjectLabel(pendingState.sub_project_id)}，进度${Math.round(seqProgress.value)}%`);
   seqRewardData.value = {
     gains: 0,
     items: [],
@@ -311,27 +393,84 @@ function restoreSequenceProgress(seq, pendingState) {
   }, 1500);
 }
 
+function startSeq() {
+  if (isRunning.value || !selectedSeq.value) return;
+  const seq = selectedSequence.value;
+  let subProjectId = selectedSubProject.value;
+  if (seq && seq.sub_projects && seq.sub_projects.length > 0) {
+    const targetSub = seq.sub_projects.find((sp) => sp.id === subProjectId);
+    const level = getSequenceLevel(seq.id);
+    if (!targetSub || level < (targetSub.unlock_level || 0)) {
+      const unlocked = seq.sub_projects
+        .filter((sp) => level >= (sp.unlock_level || 0))
+        .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+      if (unlocked.length > 0) {
+        subProjectId = unlocked[unlocked.length - 1].id;
+        selectedSubProject.value = subProjectId;
+      } else {
+        subProjectId = seq.sub_projects[0].id;
+        selectedSubProject.value = subProjectId;
+      }
+    }
+  }
+  seqInterval.value = getSequenceInterval(selectedSeq.value, subProjectId);
+  startProgressTimer();
+  ws.value?.send(
+    JSON.stringify({
+      type: "C_StartSeq",
+      seq_id: selectedSeq.value,
+      sub_project_id: subProjectId,
+      target: 100
+    })
+  );
+}
+
 function stopSeq() {
   stopProgressTimer();
-  ws.value.send(JSON.stringify({ type: "C_StopSeq" }));
+  ws.value?.send(JSON.stringify({ type: "C_StopSeq" }));
+  activeSubProject.value = "";
+}
+
+function startProgressTimer() {
+  seqProgress.value = 0;
+  clearInterval(progressTimer.value);
+  progressTimer.value = setInterval(() => {
+    seqProgress.value += 100 / (seqInterval.value * 10);
+    if (seqProgress.value >= 100) {
+      seqProgress.value = 0;
+    }
+  }, 100);
+}
+
+function stopProgressTimer() {
+  clearInterval(progressTimer.value);
+  seqProgress.value = 0;
+}
+
+function equipItem(itemId) {
+  if (!itemId) return;
+  ws.value?.send(JSON.stringify({ type: "C_EquipItem", item_id: itemId }));
+}
+
+function unequipItem(slot) {
+  if (!slot) return;
+  ws.value?.send(JSON.stringify({ type: "C_UnequipItem", slot }));
 }
 
 function addItemNotification(item) {
   const notification = {
     id: notificationId.value++,
-    item: item,
+    item,
     timestamp: Date.now()
   };
   itemNotifications.value.push(notification);
-
-  // 1秒后自动移除通知
   setTimeout(() => {
     removeNotification(notification.id);
   }, 1000);
 }
 
 function removeNotification(id) {
-  const index = itemNotifications.value.findIndex(n => n.id === id);
+  const index = itemNotifications.value.findIndex((n) => n.id === id);
   if (index > -1) {
     itemNotifications.value.splice(index, 1);
   }
@@ -339,10 +478,8 @@ function removeNotification(id) {
 
 function confirmOfflineReward() {
   showOfflineReward.value = false;
-  // 将离线收益应用到当前状态
   if (offlineRewardData.value) {
     gains.value += offlineRewardData.value.gains;
-    // 合并离线物品到背包
     Object.entries(offlineRewardData.value.items).forEach(([itemId, count]) => {
       if (bag.value[itemId]) {
         bag.value[itemId] += count;
@@ -350,11 +487,7 @@ function confirmOfflineReward() {
         bag.value[itemId] = count;
       }
     });
-
-    // 添加日志
     logs.value.push(`🌙 离线${offlineRewardData.value.duration}秒，获得${offlineRewardData.value.gains}点灵气`);
-
-    // 显示物品通知
     Object.entries(offlineRewardData.value.items).forEach(([itemId, count]) => {
       for (let i = 0; i < count; i++) {
         addItemNotification({ id: itemId, name: getItemName(itemId), icon: getItemIcon(itemId), count: 1 });
@@ -364,207 +497,236 @@ function confirmOfflineReward() {
 }
 
 function getSequenceName(seqId) {
-  const seq = sequences.value.find(s => s.id === seqId);
+  const seq = sequences.value.find((s) => s.id === seqId);
   return seq ? seq.name : seqId;
 }
 
+function getSequenceLevel(seqId) {
+  return seqLevels.value[seqId] || 0;
+}
+
+function getSequenceInterval(seqId, subProjectId) {
+  const seq = sequences.value.find((s) => s.id === seqId);
+  if (!seq) return 3;
+  let interval = seq.tick_interval || 3;
+  const sub = (seq.sub_projects || []).find((sp) => sp.id === (subProjectId || selectedSubProject.value));
+  if (sub && sub.interval_modifier) {
+    interval = interval * sub.interval_modifier;
+  }
+  return Math.max(interval, 0.5);
+}
+
+function formatSubProjectLabel(subProjectId) {
+  if (!subProjectId) return "";
+  const seq = selectedSequence.value || sequences.value.find((s) => s.sub_projects?.some((sp) => sp.id === subProjectId));
+  const sub = seq?.sub_projects?.find((sp) => sp.id === subProjectId);
+  return sub ? ` · ${sub.name}` : "";
+}
+
+
+function getInventoryItem(slot) {
+  return inventoryEntries.value[slot - 1] || null;
+}
 function getItemIcon(itemId) {
   const icons = {
-    // 灵物类
     'herb_spirit': '🌿',
     'herb_rare': '🍄',
     'herb_legendary': '🌺',
     'flower_soul': '🌸',
-
-    // 矿物类
+    'herb_mist': '🌫️',
+    'herb_ancient_seed': '🌱',
+    'herb_mythic_dew': '💧',
     'ore_iron': '⛏️',
     'ore_copper': '🔶',
     'ore_silver': '🔷',
     'ore_gold': '🪙',
     'crystal_spirit': '💎',
-
-    // 灵精类
+    'ore_core': '🪨',
+    'ore_deep_fragment': '⚒️',
+    'ore_relic_core': '🧱',
     'essence_fire': '🔥',
     'essence_water': '💧',
     'essence_earth': '🪨',
     'essence_wind': '🌪️',
-
-    // 丹药类
+    'meditation_insight': '📜',
+    'meditation_soulcore': '🧠',
+    'meditation_astral_essence': '🌌',
     'pill_low': '💊',
     'pill_mid': '🧪',
     'pill_high': '⚗️',
     'elixir_life': '🧬',
-
-    // 武器法器类
+    'alchemy_secret': '📘',
+    'alchemy_phoenix': '🔥',
+    'alchemy_heaven_seed': '🌟',
     'sword_basic': '⚔️',
     'sword_spirit': '✨',
     'sword_divine': '🗡️',
     'armor_basic': '👘',
+    'combat_banner': '🎏',
     'charm_protection': '🔮',
-
-    // 符箓类
     'talisman_basic': '📜',
     'talisman_advanced': '🪄',
     'talisman_legendary': '📖',
+    'talisman_rune_seed': '🔤',
+    'talisman_lightsigil': '🌠',
+    'talisman_sacred_core': '💠',
     'scroll_ancient': '📜',
-
-    // 灵兽类
     'beast_core': '🔴',
     'beast_soul': '👻',
     'beast_essence': '✨',
     'companion_egg': '🥚',
-
-    // 阵法类
+    'beast_contract': '🐾',
+    'beast_star_core': '🌟',
+    'beast_origin': '🦄',
     'array_basic': '🔯',
     'array_advanced': '🎯',
     'array_legendary': '⭐',
     'rune_power': '🔠',
-
-    // 剑道类
+    'array_core': '🌀',
+    'array_star': '🌌',
+    'array_origin': '🧿',
     'sword_intent': '💫',
     'sword_aura': '⚡',
     'sword_manual': '📚',
-    'essence_sword': '🗡️'
+    'essence_sword': '🗡️',
+    'sword_mark': '🪙',
+    'sword_soul': '🌀',
+    'sword_heart': '💖',
+    'combat_token': '🥇',
+    'combat_medal': '🎖️',
+    'combat_art': '📒',
+    'combat_plan': '🗺️',
+    'combat_core': '🔥',
+    'sect_contribution': '📯',
+    'sect_badge': '🎗️',
+    'sect_secret': '📜',
+    'sect_order': '📿',
+    'sect_skill_core': '💠',
+    'sect_legacy': '📘'
   };
   return icons[itemId] || '📦';
 }
 
 function getItemName(itemId) {
   const names = {
-    // 灵物类
     'herb_spirit': '灵草',
     'herb_rare': '千年灵芝',
     'herb_legendary': '仙界神草',
     'flower_soul': '魂花',
-
-    // 矿物类
+    'herb_mist': '雾灵草',
+    'herb_ancient_seed': '仙草灵种',
+    'herb_mythic_dew': '仙露灵髓',
     'ore_iron': '玄铁矿',
     'ore_copper': '赤铜矿',
     'ore_silver': '皓银矿',
     'ore_gold': '金沙矿',
     'crystal_spirit': '灵晶石',
-
-    // 灵精类
+    'ore_core': '灵矿精核',
+    'ore_deep_fragment': '深渊矿晶',
+    'ore_relic_core': '遗迹之心',
     'essence_fire': '火灵精',
     'essence_water': '水灵精',
     'essence_earth': '土灵精',
     'essence_wind': '风灵精',
-
-    // 丹药类
+    'meditation_insight': '悟道残卷',
+    'meditation_soulcore': '元神凝核',
+    'meditation_astral_essence': '太虚灵光',
     'pill_low': '筑基丹',
     'pill_mid': '金丹',
     'pill_high': '元婴丹',
     'elixir_life': '生命仙露',
-
-    // 武器法器类
+    'alchemy_secret': '丹道秘方',
+    'alchemy_phoenix': '凤凰真焰',
+    'alchemy_heaven_seed': '天机药胚',
     'sword_basic': '基础法剑',
     'sword_spirit': '灵剑',
     'sword_divine': '仙剑',
-    'armor_basic': '法袍',
+    'armor_basic': '灵纹法袍',
+    'combat_banner': '战魂披风',
     'charm_protection': '护身符',
-
-    // 符箓类
     'talisman_basic': '基础符箓',
     'talisman_advanced': '高级符箓',
     'talisman_legendary': '传说符箓',
+    'talisman_rune_seed': '符文灵种',
+    'talisman_lightsigil': '星辉符印',
+    'talisman_sacred_core': '圣灵符心',
     'scroll_ancient': '古老卷轴',
-
-    // 灵兽类
     'beast_core': '兽核',
     'beast_soul': '兽魂',
     'beast_essence': '灵兽精元',
     'companion_egg': '灵兽蛋',
-
-    // 阵法类
+    'beast_contract': '灵兽契约靴',
+    'beast_star_core': '星辉兽魂',
+    'beast_origin': '神兽源核',
     'array_basic': '基础阵盘',
     'array_advanced': '高级阵盘',
     'array_legendary': '传说阵图',
     'rune_power': '力量符文',
-
-    // 剑道类
+    'array_core': '阵法核心',
+    'array_star': '星辰阵核',
+    'array_origin': '太古阵心',
     'sword_intent': '剑意碎片',
     'sword_aura': '剑气',
     'sword_manual': '剑谱',
-    'essence_sword': '剑灵精华'
+    'essence_sword': '剑灵精华',
+    'sword_mark': '剑道印记',
+    'sword_soul': '剑魂之魄',
+    'sword_heart': '剑心悟道石',
+    'combat_token': '战斗印记',
+    'combat_medal': '战魂勋章',
+    'combat_art': '战技秘卷',
+    'combat_plan': '战术手札',
+    'combat_core': '战魂核心',
+    'sect_contribution': '宗门贡献令',
+    'sect_badge': '宗门徽记',
+    'sect_secret': '秘法残卷',
+    'sect_order': '长老令牌',
+    'sect_skill_core': '功法心印',
+    'sect_legacy': '宗门传承玉简'
   };
   return names[itemId] || itemId;
 }
 
-const cultivationRealm = computed(() => {
-  const realms = [
-    { level: 1, name: '凡人', desc: '芸芸众生，开始修仙之路' },
-    { level: 5, name: '炼气', desc: '初窥门径，引气入体' },
-    { level: 10, name: '筑基', desc: '筑下道基，真正的修仙者' },
-    { level: 20, name: '金丹', desc: '凝结金丹，大道可期' },
-    { level: 30, name: '元婴', desc: '元神出窍，逍遥天地' }
-  ];
-
-  for (let i = realms.length - 1; i >= 0; i--) {
-    if (playerLevel.value >= realms[i].level) {
-      return realms[i];
-    }
-  }
-  return realms[0];
-});
-
-function getSequenceLevel(seqId) {
-  return seqLevels.value[seqId] || 0;
-}
-
-function getSequenceInterval(seqId) {
-  const intervalMap = {
-    'meditation': 3,
-    'herb_gathering': 4,
-    'mining': 4,
-    'alchemy': 5,
-    'weapon_crafting': 6,
-    'talisman_making': 4,
-    'spirit_beast_taming': 5,
-    'array_mastery': 6,
-    'sword_practice': 4
-  };
-  return intervalMap[seqId] || 3;
-}
-
-function getInventoryItem(slot) {
-  const items = Object.entries(bag.value);
-  if (slot <= items.length && slot > 0) {
-    const [itemId, count] = items[slot - 1];
-    return { id: itemId, count: count };
-  }
-  return null;
-}
 
 function getSequenceIcon(seqId) {
   const icons = {
-    'meditation': '🧘‍♂️',
-    'herb_gathering': '🌿',
-    'mining': '⛏️',
-    'alchemy': '🧪',
-    'weapon_crafting': '⚔️',
-    'talisman_making': '📜',
-    'spirit_beast_taming': '🐲',
-    'array_mastery': '🔮',
-    'sword_practice': '⚡'
+    meditation: "🧘",
+    herb_gathering: "🌿",
+    mining: "⛏️",
+    alchemy: "⚗️",
+    weapon_crafting: "🔨",
+    talisman_making: "📜",
+    spirit_beast_taming: "🐲",
+    array_mastery: "🔮",
+    sword_practice: "🗡️",
+    combat_training: "⚔️",
+    sect_training: "🏯"
   };
-  return icons[seqId] || '🎯';
+  return icons[seqId] || "🌀";
 }
 
 function getSequenceDesc(seqId) {
-  const descs = {
-    'meditation': '静心凝神，领悟天地大道',
-    'herb_gathering': '深山采药，收集天地灵草',
-    'mining': '开山采石，获取灵矿宝玉',
-    'alchemy': '炼制丹药，提升修为境界',
-    'weapon_crafting': '锻造法器，增强战力',
-    'talisman_making': '绘制符箓，获得神秘力量',
-    'spirit_beast_taming': '驯养灵兽，得道相助',
-    'array_mastery': '研究阵法，掌握天地之力',
-    'sword_practice': '剑道修行，磨练战斗技巧'
+  const desc = {
+    meditation: "凝神静气，领悟天地灵意",
+    herb_gathering: "深入山野搜集灵草药材",
+    mining: "探寻灵矿脉络锻体强身",
+    alchemy: "炼制丹药提升修为根基",
+    weapon_crafting: "锻造法器提升战力",
+    talisman_making: "描绘符箓助力修行",
+    spirit_beast_taming: "驯养灵兽协助战斗",
+    array_mastery: "研习阵法布列天地",
+    sword_practice: "磨砺剑心锋芒毕露",
+    combat_training: "实战演练淬炼战意",
+    sect_training: "完成宗门任务提升地位"
   };
-  return descs[seqId] || '神秘的修炼法门';
+  return desc[seqId] || "独特的修炼方式";
+}
+
+function formatBonus(value) {
+  return `${Math.round((value || 0) * 100)}%`;
 }
 </script>
+
 
 <template>
   <!-- 加载界面 -->
@@ -659,7 +821,40 @@ function getSequenceDesc(seqId) {
           </div>
           <div class="sequence-name">{{ s.name }}</div>
           <div class="sequence-desc">{{ getSequenceDesc(s.id) }}</div>
-          <div class="sequence-time">{{ getSequenceInterval(s.id) }}秒/次</div>
+          <div class="sequence-time">{{ s.tick_interval }}秒/次</div>
+        </div>
+      </div>
+
+      <div v-if="availableSubProjects.length > 0" class="subproject-panel">
+        <h3 class="subproject-title">🧩 序列子项目</h3>
+        <div class="subproject-grid">
+          <div
+            v-for="sp in availableSubProjects"
+            :key="sp.id"
+            class="subproject-card"
+            :class="{ active: selectedSubProject === sp.id, locked: !sp.unlocked }"
+            @click="selectSubProject(sp)"
+          >
+            <div class="subproject-name">
+              {{ sp.name }}
+              <span v-if="!sp.unlocked" class="subproject-lock">🔒 {{ sp.unlock_level }}重</span>
+            </div>
+            <div class="subproject-desc">{{ sp.description }}</div>
+            <div class="subproject-meta">
+              <span v-if="sp.gain_multiplier">灵气×{{ sp.gain_multiplier.toFixed(2) }}</span>
+              <span v-if="sp.exp_multiplier">经验×{{ sp.exp_multiplier.toFixed(2) }}</span>
+              <span v-if="sp.interval_modifier">节奏×{{ sp.interval_modifier.toFixed(2) }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="selectedSubProjectDetail" class="subproject-detail">
+          <div class="detail-line">当前子项目：<strong>{{ selectedSubProjectDetail.name }}</strong></div>
+          <div class="detail-bonus">
+            灵气 {{ selectedSubProjectDetail.gain_multiplier ? `×${selectedSubProjectDetail.gain_multiplier.toFixed(2)}` : "×1.00" }} ·
+            稀有 {{ formatBonus(selectedSubProjectDetail.rare_chance_bonus) }} ·
+            经验 {{ selectedSubProjectDetail.exp_multiplier ? `×${selectedSubProjectDetail.exp_multiplier.toFixed(2)}` : "×1.00" }} ·
+            节奏 {{ selectedSubProjectDetail.interval_modifier ? `×${selectedSubProjectDetail.interval_modifier.toFixed(2)}` : "×1.00" }}
+          </div>
         </div>
       </div>
 
@@ -670,7 +865,7 @@ function getSequenceDesc(seqId) {
           class="btn btn-primary"
           :disabled="!selectedSeq"
         >
-          🚀 开始修炼
+          🚀 开始修炼 ({{ currentSequenceInterval.toFixed(2) }}秒/次)
         </button>
         <button
           v-else
@@ -679,6 +874,67 @@ function getSequenceDesc(seqId) {
         >
           ⏸️ 停止修炼
         </button>
+      </div>
+    </div>
+
+    <div class="equipment-panel">
+      <h2 class="panel-title">⚔️ 神兵装备</h2>
+      <div class="equipment-summary">
+        <div class="equipment-summary-item">
+          <span class="summary-label">灵气加成</span>
+          <span class="summary-value">+{{ formattedEquipmentBonus.gain }}%</span>
+        </div>
+        <div class="equipment-summary-item">
+          <span class="summary-label">稀有加成</span>
+          <span class="summary-value">+{{ formattedEquipmentBonus.rare }}%</span>
+        </div>
+        <div class="equipment-summary-item">
+          <span class="summary-label">经验加成</span>
+          <span class="summary-value">+{{ formattedEquipmentBonus.exp }}%</span>
+        </div>
+      </div>
+      <div class="equipment-slot-grid">
+        <div
+          v-for="slot in equipmentSlotOrder"
+          :key="slot"
+          class="equipment-slot-card"
+        >
+          <div class="slot-title">{{ equipmentSlotName[slot] }}</div>
+          <div v-if="equipmentSlots[slot]" class="slot-content">
+            <div class="slot-main">
+              <div class="slot-icon">{{ getItemIcon(equipmentSlots[slot].item_id) }}</div>
+              <div class="slot-info">
+                <div class="slot-name">{{ equipmentSlots[slot].name }}</div>
+                <div class="slot-quality">{{ equipmentSlots[slot].quality }}</div>
+                <div class="slot-attrs">
+                  <span>灵气 {{ formatBonus(equipmentSlots[slot].attributes?.gain_multiplier) }}</span>
+                  <span>稀有 {{ formatBonus(equipmentSlots[slot].attributes?.rare_chance_bonus) }}</span>
+                  <span>经验 {{ formatBonus(equipmentSlots[slot].attributes?.exp_multiplier) }}</span>
+                </div>
+              </div>
+            </div>
+            <button class="slot-btn" @click="unequipItem(slot)">卸下</button>
+          </div>
+          <div v-else class="slot-empty">未装备</div>
+        </div>
+      </div>
+      <div class="equippable-panel">
+        <h3 class="equippable-title">🎁 可装备物品</h3>
+        <div class="equippable-list">
+          <div
+            v-for="item in equippableItems"
+            :key="item.id"
+            class="equippable-card"
+          >
+            <div class="equippable-icon">{{ item.icon }}</div>
+            <div class="equippable-info">
+              <div class="equippable-name">{{ item.name }} ×{{ item.count }}</div>
+              <div class="equippable-slot-label">适用：{{ equipmentSlotName[item.slot] || item.slot }}</div>
+            </div>
+            <button class="slot-btn" @click="equipItem(item.id)">装备</button>
+          </div>
+          <div v-if="equippableItems.length === 0" class="no-equipment">背包中暂无可装备的物品</div>
+        </div>
       </div>
     </div>
 
@@ -980,6 +1236,103 @@ function getSequenceDesc(seqId) {
 @keyframes iconFloat {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-3px); }
+}
+
+.subproject-panel {
+  margin-top: 20px;
+  background: rgba(76, 175, 80, 0.08);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.subproject-title {
+  font-size: 18px;
+  color: #a4ffb0;
+  margin-bottom: 12px;
+}
+
+.subproject-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.subproject-card {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(76, 175, 80, 0.2);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.subproject-card:hover {
+  border-color: rgba(76, 175, 80, 0.6);
+  background: rgba(76, 175, 80, 0.12);
+  transform: translateY(-3px);
+}
+
+.subproject-card.active {
+  border-color: #4caf50;
+  background: rgba(76, 175, 80, 0.18);
+  box-shadow: 0 0 12px rgba(76, 175, 80, 0.35);
+}
+
+.subproject-card.locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.subproject-name {
+  font-weight: bold;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.subproject-lock {
+  font-size: 12px;
+  color: #ffcc80;
+}
+
+.subproject-desc {
+  font-size: 13px;
+  color: #c8e6c9;
+  min-height: 36px;
+}
+
+.subproject-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: #b2dfdb;
+}
+
+.subproject-detail {
+  margin-top: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(76, 175, 80, 0.25);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #d0f8ce;
+}
+
+.detail-line {
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.detail-bonus {
+  font-size: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #b2dfdb;
 }
 
 .sequence-card:hover .sequence-icon {
@@ -2192,5 +2545,190 @@ function getSequenceDesc(seqId) {
   .items-grid {
     grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
   }
+}
+
+.equipment-panel {
+  margin-top: 25px;
+  background: rgba(63, 81, 181, 0.12);
+  border: 1px solid rgba(63, 81, 181, 0.35);
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.equipment-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+
+.equipment-summary-item {
+  flex: 1;
+  min-width: 140px;
+  text-align: center;
+}
+
+.summary-label {
+  display: block;
+  font-size: 12px;
+  color: #c5cae9;
+  margin-bottom: 4px;
+}
+
+.summary-value {
+  display: block;
+  font-size: 20px;
+  font-weight: bold;
+  color: #ffeb3b;
+}
+
+.equipment-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 15px;
+}
+
+.equipment-slot-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(63, 81, 181, 0.2);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.slot-title {
+  font-weight: bold;
+  color: #c5cae9;
+  margin-bottom: 12px;
+}
+
+.slot-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.slot-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slot-icon {
+  font-size: 30px;
+}
+
+.slot-info {
+  flex: 1;
+}
+
+.slot-name {
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.slot-quality {
+  font-size: 12px;
+  color: #ffcc80;
+  margin-top: 4px;
+}
+
+.slot-attrs {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #b3e5fc;
+}
+
+.slot-btn {
+  align-self: flex-end;
+  background: rgba(244, 67, 54, 0.2);
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  color: #ffcdd2;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s ease, border 0.3s ease;
+}
+
+.slot-btn:hover {
+  background: rgba(244, 67, 54, 0.35);
+  border-color: rgba(244, 67, 54, 0.6);
+}
+
+.slot-empty {
+  text-align: center;
+  padding: 20px 10px;
+  color: #c5cae9;
+  border: 1px dashed rgba(63, 81, 181, 0.4);
+  border-radius: 10px;
+}
+
+.equippable-panel {
+  margin-top: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.equippable-title {
+  font-size: 16px;
+  color: #bbdefb;
+  margin-bottom: 12px;
+}
+
+.equippable-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.equippable-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(63, 81, 181, 0.25);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 220px;
+  justify-content: space-between;
+}
+
+.equippable-icon {
+  font-size: 28px;
+}
+
+.equippable-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.equippable-name {
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.equippable-slot-label {
+  font-size: 12px;
+  color: #c5cae9;
+}
+
+.no-equipment {
+  flex: 1;
+  text-align: center;
+  color: #b0bec5;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
 }
 </style>

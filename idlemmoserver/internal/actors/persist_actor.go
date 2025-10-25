@@ -45,6 +45,7 @@ func (p *PersistActor) Receive(ctx actor.Context) {
 			SeqLevels:         m.SeqLevels,
 			Inventory:         bag,
 			Exp:               m.Exp,
+			Equipment:         m.Equipment,
 			OfflineLimitHours: m.OfflineLimitHours,
 		})
 		if err != nil {

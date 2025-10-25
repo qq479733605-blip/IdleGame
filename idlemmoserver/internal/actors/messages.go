@@ -49,6 +49,7 @@ type MsgSavePlayer struct {
 	SeqLevels         map[string]int
 	Inventory         *domain.Inventory
 	Exp               int64
+	Equipment         map[string]domain.EquipmentState
 	OfflineLimitHours int64
 }
 type MsgLoadPlayer struct {
@@ -85,3 +86,7 @@ type CStopSeq struct {
 
 type SeqTick struct{}
 type SeqStop struct{}
+
+type MsgUpdateEquipmentBonus struct {
+	Bonus domain.EquipmentBonus
+}

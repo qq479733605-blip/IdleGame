@@ -48,7 +48,7 @@ func GetOrCreatePlayerActor(root *actor.RootContext, playerID string) *actor.PID
 	}
 
 	props := actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewPlayerActor(playerID, root, GlobalPersistPID)
+		return actors.NewPlayerActor(playerID, root, GlobalPersistPID, GlobalSchedulerPID)
 	})
 	pid := root.Spawn(props)
 	globalPlayerActorMap[playerID] = pid
@@ -213,17 +213,23 @@ func ensurePlayerActor(root *actor.RootContext, playerID string) *actor.PID {
 	// 暂时使用简化的创建逻辑，实际中可能需要全局注册
 	props := actor.PropsFromProducer(func() actor.Actor {
 		// 使用全局persistPID
-		return actors.NewPlayerActor(playerID, root, GlobalPersistPID)
+		return actors.NewPlayerActor(playerID, root, GlobalPersistPID, GlobalSchedulerPID)
 	})
 	return root.Spawn(props)
 }
 
 // 全局persistPID，在main.go中设置
 var GlobalPersistPID *actor.PID
+var GlobalSchedulerPID *actor.PID
 
 // SetPersistPID 设置全局persistPID
 func SetPersistPID(pid *actor.PID) {
 	GlobalPersistPID = pid
+}
+
+// SetSchedulerPID 设置全局schedulerPID
+func SetSchedulerPID(pid *actor.PID) {
+	GlobalSchedulerPID = pid
 }
 
 // parseToken 简单token解析

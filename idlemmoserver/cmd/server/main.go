@@ -22,6 +22,9 @@ func main() {
 	if err := domain.LoadConfig("internal/domain/config_full.json"); err != nil {
 		log.Fatal(err)
 	}
+	if err := domain.LoadEquipmentConfig("internal/domain/equipment_config.json"); err != nil {
+		log.Fatal(err)
+	}
 
 	// 2) ActorSystem
 	sys := actor.NewActorSystem()
@@ -33,12 +36,17 @@ func main() {
 		return actors.NewPersistActor(repo)
 	}))
 
-	// 4) 设置全局persistPID
+	schedulerPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
+		return actors.NewSchedulerActor()
+	}))
+
+	// 4) 设置全局persistPID、schedulerPID
 	gateway.SetPersistPID(persistPID)
+	gateway.SetSchedulerPID(schedulerPID)
 
 	// 5) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
 	gatewayPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewGatewayActor(root, persistPID)
+		return actors.NewGatewayActor(root, persistPID, schedulerPID)
 	}))
 
 	// 6) HTTP/WS 路由

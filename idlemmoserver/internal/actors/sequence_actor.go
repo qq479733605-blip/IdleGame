@@ -10,13 +10,16 @@ import (
 )
 
 type SequenceActor struct {
-	playerID string
-	seq      *domain.Sequence
-	cfg      *domain.SequenceConfig
-	parent   *actor.PID
+	playerID       string
+	seq            *domain.Sequence
+	cfg            *domain.SequenceConfig
+	parent         *actor.PID
+	scheduler      *actor.PID
+	tickInterval   time.Duration
+	equipmentBonus domain.EquipmentBonus
 }
 
-func NewSequenceActor(playerID, seqID string, level int, parent *actor.PID) actor.Actor {
+func NewSequenceActor(playerID, seqID string, level int, parent, scheduler *actor.PID, subProject *domain.SequenceSubProject, bonus domain.EquipmentBonus) actor.Actor {
 	cfg, ok := domain.GetSequenceConfig(seqID)
 	if !ok {
 		panic("sequence config not found: " + seqID)
@@ -27,59 +30,90 @@ func NewSequenceActor(playerID, seqID string, level int, parent *actor.PID) acto
 		StartTime: time.Now(),
 		LastTick:  time.Now(),
 	}
+	if subProject != nil {
+		seq.SetSubProject(subProject)
+	}
+	interval := cfg.EffectiveInterval(subProject)
+	if interval <= 0 {
+		interval = time.Duration(cfg.TickInterval) * time.Second
+	}
 	return &SequenceActor{
-		playerID: playerID,
-		seq:      seq,
-		cfg:      cfg,
-		parent:   parent,
+		playerID:       playerID,
+		seq:            seq,
+		cfg:            cfg,
+		parent:         parent,
+		scheduler:      scheduler,
+		tickInterval:   interval,
+		equipmentBonus: bonus,
 	}
 }
 
 func (s *SequenceActor) Receive(ctx actor.Context) {
-	switch ctx.Message().(type) {
+	switch msg := ctx.Message().(type) {
 	case *actor.Started:
-		s.scheduleNext(ctx)
+		if s.scheduler != nil {
+			ctx.Send(s.scheduler, &AddTarget{PID: ctx.Self(), Interval: s.tickInterval})
+		} else {
+			s.scheduleNext(ctx)
+		}
 
 	case *SeqTick:
-		r := s.seq.Tick(s.cfg)
+		r := s.seq.Tick(s.cfg, s.equipmentBonus)
 		var rareName string
 		if r.RareEvt != nil {
 			rareName = r.RareEvt.Name
 		}
 
-		// 添加调试日志
 		logx.Info("Sequence Tick", "playerID", s.playerID, "seqID", s.seq.ID,
 			"gains", r.Gains, "items", len(r.Items), "rareEvent", rareName)
 
-		// 如果有物品掉落，打印详细信息
 		for _, item := range r.Items {
 			logx.Info("Item drop", "itemID", item.ID, "itemName", item.Name, "chance", item.DropChance)
 		}
 
-		// 只有当有奇遇时才包含
 		var rareEvents []string
 		if r.RareEvt != nil {
 			rareEvents = []string{rareName}
 		}
 
 		ctx.Send(s.parent, &SeqResult{
-			Gains:   r.Gains,
-			Rare:    rareEvents,
-			Items:   r.Items,
-			SeqID:   s.seq.ID,
-			Level:   r.Level,
-			CurExp:  r.CurExp,
-			Leveled: r.Leveled,
+			Gains:        r.Gains,
+			Rare:         rareEvents,
+			Items:        r.Items,
+			SeqID:        s.seq.ID,
+			Level:        r.Level,
+			CurExp:       r.CurExp,
+			Leveled:      r.Leveled,
+			SubProjectID: r.SubProjectID,
 		})
-		s.scheduleNext(ctx)
+		if s.scheduler == nil {
+			s.scheduleNext(ctx)
+		}
 
-	case *SeqStop, *actor.Stopping:
+	case *MsgUpdateEquipmentBonus:
+		s.equipmentBonus = msg.Bonus
+
+	case *SeqStop:
+		s.unregister(ctx)
 		ctx.Stop(ctx.Self())
+
+	case *actor.Stopping:
+		s.unregister(ctx)
 	}
 }
 
 func (s *SequenceActor) scheduleNext(ctx actor.Context) {
-	time.AfterFunc(time.Duration(s.cfg.TickInterval)*time.Second, func() {
+	interval := s.tickInterval
+	if interval <= 0 {
+		interval = time.Duration(s.cfg.TickInterval) * time.Second
+	}
+	time.AfterFunc(interval, func() {
 		ctx.Send(ctx.Self(), &SeqTick{})
 	})
+}
+
+func (s *SequenceActor) unregister(ctx actor.Context) {
+	if s.scheduler != nil {
+		ctx.Send(s.scheduler, &RemoveTarget{PID: ctx.Self()})
+	}
 }
