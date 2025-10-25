@@ -34,8 +34,8 @@
 
 | 阶段 | 目标 | 说明 |
 |------|------|------|
-| **Phase 1** | ✅ 单人挂机循环闭环 | 登录 → 修炼 → 掉落 → 背包 → 存盘 |
-| **Phase 2** | 🔄 多序列成长系统 | 每个序列可升级、强化、解锁新玩法 |
+| **Phase 1** | ✅ 单人挂机循环闭环 | 登录 → 修炼 → 掉落 → 装备 → 背包 → 存盘 |
+| **Phase 2** | 🔄 深度成长系统 | 子项目、成就、物品使用、序列强化 |
 | **Phase 3** | 🤝 多人系统 | 组队、交易行、排行榜、世界事件 |
 | **Phase 4** | ☁️ 分布式架构 | 使用 protoactor-go cluster 分片部署 |
 | **Phase 5** | 🌍 LiveOps 服务器 | 支持活动、限时奇遇、世界进度 |
@@ -121,7 +121,10 @@ idlemmoserver/
 - [x] WebSocket 通信（Gorilla）
 - [x] 玩家 Actor 生命周期
 - [x] SequenceActor：修炼逻辑 + 掉落 + 奇遇
-- [x] Domain 层：Sequence / Formula / Items
+- [x] SchedulerActor：统一时间调度系统
+- [x] Domain 层：Sequence / Formula / Items / Equipment
+- [x] 修炼序列等级和进度系统
+- [x] 装备系统：掉落、装备、属性加成
 - [x] Inventory 背包系统
 - [x] PersistActor 异步存盘
 - [x] JSONRepo 文件持久化
@@ -176,9 +179,9 @@ sequenceDiagram
 
 | 模块 | 内容 | 状态 |
 |------|------|------|
-| 🕓 SchedulerActor | 统一 Tick 调度 | 🚧 待实现 |
-| 🎚 SequenceLeveling | 序列经验 → 等级提升 → 收益加成 | 🚧 设计中 |
-| 💬 背包指令 | `C_ListBag` / `C_UseItem` 消息 | 🚧 待添加 |
+| 🔮 子项目系统 | 序列分支选择、解锁条件 | 🚧 设计中 |
+| 🎯 成就系统 | 修炼里程碑、特殊奖励 | 🚧 规划中 |
+| 💬 物品使用系统 | 消耗品使用、临时增益 | 🚧 待添加 |
 | 🌐 多人功能 | 组队修炼、交易行、排行榜 | 🧱 预研阶段 |
 | ☁️ Cluster 支持 | protoactor-go/cluster 分布式部署 | 🧱 未来目标 |
 

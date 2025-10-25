@@ -79,6 +79,19 @@ func (s *Sequence) Tick(cfg *SequenceConfig, bonus EquipmentBonus) TickResult {
 		}
 	}
 
+	// 装备掉落
+	for _, equip := range cfg.EquipmentDrops {
+		if s.Level >= equip.MinLevel && rand.Float64() < equip.DropChance {
+			items = append(items, Item{
+				ID:          equip.ID,
+				Name:        equip.Name,
+				DropChance:  equip.DropChance,
+				Value:       50,   // 装备基础价值
+				IsEquipment: true, // 标记为装备
+			})
+		}
+	}
+
 	// 奇遇
 	var rare *RareEvent
 	if rand.Float64() < rareChance && len(cfg.RareEvents) > 0 {

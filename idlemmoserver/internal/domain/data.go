@@ -9,6 +9,14 @@ import (
 
 var Sequences map[string]*SequenceConfig
 
+// EquipmentDrop 装备掉落配置
+type EquipmentDrop struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	DropChance float64 `json:"drop_chance"`
+	MinLevel   int     `json:"min_level"` // 最低序列等级要求
+}
+
 // SequenceSummary 向前端返回序列的完整概览
 type SequenceSummary struct {
 	ID           string            `json:"id"`
@@ -30,14 +38,15 @@ type SubProjectBrief struct {
 }
 
 type SequenceConfig struct {
-	Name         string               `json:"name"`
-	BaseGain     int64                `json:"base_gain"`
-	GrowthFactor float64              `json:"growth_factor"`
-	TickInterval int                  `json:"tick_interval"`
-	RareChance   float64              `json:"rare_chance"`
-	Drops        []Item               `json:"drops"`
-	RareEvents   []RareEvent          `json:"rare_events"`
-	SubProjects  []SequenceSubProject `json:"sub_projects"`
+	Name           string               `json:"name"`
+	BaseGain       int64                `json:"base_gain"`
+	GrowthFactor   float64              `json:"growth_factor"`
+	TickInterval   int                  `json:"tick_interval"`
+	RareChance     float64              `json:"rare_chance"`
+	Drops          []Item               `json:"drops"`
+	EquipmentDrops []EquipmentDrop      `json:"equipment_drops"`
+	RareEvents     []RareEvent          `json:"rare_events"`
+	SubProjects    []SequenceSubProject `json:"sub_projects"`
 
 	// 成长相关（表驱动）
 	LevelUpExp int64   `json:"levelup_exp"`

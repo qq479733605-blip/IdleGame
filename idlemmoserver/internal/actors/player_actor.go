@@ -133,7 +133,13 @@ func (p *PlayerActor) Receive(ctx actor.Context) {
 			p.currentSeqID = ""
 			p.activeSubProject = ""
 			if p.isOnline {
-				p.sendToClient(map[string]any{"type": "S_SeqEnded"})
+				p.sendToClient(map[string]any{
+					"type":               "S_SeqEnded",
+					"is_running":         false,
+					"seq_id":             "",
+					"seq_level":          0,
+					"active_sub_project": "",
+				})
 			}
 		}
 	}
@@ -251,6 +257,7 @@ func (p *PlayerActor) handleLoadResult(m *MsgLoadResult) {
 		for seqID := range domain.Sequences {
 			p.seqLevels[seqID] = 1 // 默认等级为 1
 		}
+
 		p.sendToClient(map[string]any{"type": "S_NewPlayer"})
 		return
 	}
@@ -288,10 +295,23 @@ func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload
 	switch b.Type {
 	case "C_Login":
 		p.sendToClient(map[string]any{
-			"type":     "S_LoginOK",
-			"msg":      "登录成功",
-			"playerId": p.playerID,
-			"exp":      p.exp,
+			"type":            "S_LoginOK",
+			"msg":             "登录成功",
+			"playerId":        p.playerID,
+			"exp":             p.exp,
+			"seq_levels":      p.seqLevels,
+			"bag":             p.inventory.List(),
+			"equipment":       p.equipment.Export(),
+			"equipment_bonus": p.equipment.TotalBonus(),
+			"is_running":      p.currentSeq != nil,
+			"seq_id":          p.currentSeqID,
+			"seq_level": func() int {
+				if p.currentSeqID != "" {
+					return p.seqLevels[p.currentSeqID]
+				}
+				return 0
+			}(),
+			"active_sub_project": p.activeSubProject,
 		})
 
 	case "C_StartSeq":
@@ -305,7 +325,13 @@ func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload
 			p.currentSeq = nil
 			p.currentSeqID = ""
 			p.activeSubProject = ""
-			p.sendToClient(map[string]any{"type": "S_SeqEnded"})
+			p.sendToClient(map[string]any{
+				"type":               "S_SeqEnded",
+				"is_running":         false,
+				"seq_id":             "",
+				"seq_level":          0,
+				"active_sub_project": "",
+			})
 		}
 
 	case "C_ListBag":

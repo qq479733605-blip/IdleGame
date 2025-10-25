@@ -39,6 +39,20 @@
                 "value": 10
             }
         ],
+        "equipment_drops": [
+            {
+                "id": "sect_badge",
+                "name": "\u5b97\u95e8\u5fbd\u8bb0",
+                "drop_chance": 0.02,
+                "min_level": 5
+            },
+            {
+                "id": "charm_protection",
+                "name": "\u62a4\u8eab\u7b26",
+                "drop_chance": 0.01,
+                "min_level": 8
+            }
+        ],
         "rare_events": [
             {
                 "name": "\u987f\u609f\u00b7\u5fc3\u6d41\u6f84\u660e",
@@ -150,6 +164,26 @@
                 "name": "\u9b42\u82b1",
                 "drop_chance": 0.15,
                 "value": 6
+            }
+        ],
+        "equipment_drops": [
+            {
+                "id": "charm_protection",
+                "name": "\u62a4\u8eab\u7b26",
+                "drop_chance": 0.025,
+                "min_level": 3
+            },
+            {
+                "id": "armor_basic",
+                "name": "\u7075\u7ebf\u6cd5\u888d",
+                "drop_chance": 0.015,
+                "min_level": 6
+            },
+            {
+                "id": "talisman_legendary",
+                "name": "\u4e0a\u53e4\u7b26\u7b93",
+                "drop_chance": 0.008,
+                "min_level": 12
             }
         ],
         "rare_events": [
@@ -269,6 +303,26 @@
                 "name": "\u7075\u6676\u77f3",
                 "drop_chance": 0.1,
                 "value": 15
+            }
+        ],
+        "equipment_drops": [
+            {
+                "id": "sword_basic",
+                "name": "\u57fa\u7840\u6cd5\u5251",
+                "drop_chance": 0.03,
+                "min_level": 4
+            },
+            {
+                "id": "sword_spirit",
+                "name": "\u7075\u5251",
+                "drop_chance": 0.012,
+                "min_level": 10
+            },
+            {
+                "id": "sword_divine",
+                "name": "\u4ed9\u5251",
+                "drop_chance": 0.005,
+                "min_level": 20
             }
         ],
         "rare_events": [

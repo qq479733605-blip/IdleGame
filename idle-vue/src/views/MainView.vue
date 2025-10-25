@@ -3,10 +3,11 @@ import { ref, onMounted, computed, watch } from "vue";
 import { useUserStore } from "../store/user";
 import { useGameStore } from "../store/game";
 import { gameConfig } from "../config";
+import { connectWS as connectWebSocket, send } from "../api/ws.js";
+import emitter from "../api/ws.js";
 
 const user = useUserStore();
 const game = useGameStore();
-const ws = ref(null);
 
 const selectedSeq = ref("");
 const selectedSubProject = ref("");
@@ -159,7 +160,10 @@ onMounted(() => {
 
   setTimeout(() => {
     isLoading.value = false;
-    connectWS();
+    // 使用 WebSocket 模块连接
+    connectWebSocket(user.token);
+    // 设置消息处理
+    setupMessageHandler();
   }, 1000); // 减少加载时间，因为配置已经是本地了
 });
 
@@ -168,25 +172,58 @@ watch(selectedSeq, (newSeq) => {
   autoSelectSubProject(newSeq);
 });
 
-function connectWS() {
-  ws.value = new WebSocket(`ws://localhost:8080/ws?token=${user.token}`);
+function setupMessageHandler() {
+  // 使用 WebSocket 模块连接
+  emitter.on('message', (event) => {
+    handleWebSocketMessage(event);
+  });
 
-  ws.value.onopen = () => {
-    logs.value.push("🌟 仙缘已定，开始你的修仙之旅！");
-    // 配置现在是本地的，不需要请求
-  };
+  // WebSocket 模块会在连接建立后自动发送 C_Login 和其他消息
+  logs.value.push("🌟 仙缘已定，开始你的修仙之旅！");
+}
 
-  ws.value.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    switch (msg.type) {
+function handleWebSocketMessage(msg) {
+  switch (msg.type) {
       case "S_LoginOK":
+        // 更新完整的玩家数据
         game.updatePlayerData({
           exp: msg.exp,
-          seq_levels: {},
+          seq_levels: msg.seq_levels,
+          bag: msg.bag,
+          equipment: msg.equipment,
+          equipment_bonus: msg.equipment_bonus
+        });
+
+        // 更新序列状态
+        game.updateSequenceStatus({
+          is_running: msg.is_running,
+          seq_id: msg.seq_id,
+          seq_level: msg.seq_level,
+          active_sub_project: msg.active_sub_project
+        });
+
+        // 如果有正在运行的序列，同步本地状态
+        if (msg.seq_id && msg.is_running) {
+          selectedSeq.value = msg.seq_id;
+          selectedSubProject.value = msg.active_sub_project || "";
+        }
+
+        logs.value.push(`🎊 ${user.username}道友，欢迎重返仙途！`);
+        break;
+      case "S_NewPlayer":
+        // 初始化新玩家的序列等级数据
+        const initialSeqLevels = {};
+        sequences.value.forEach(seq => {
+          initialSeqLevels[seq.id] = 1; // 所有序列初始等级为1
+        });
+
+        game.updatePlayerData({
+          exp: 0,
+          seq_levels: initialSeqLevels,
           bag: {},
           equipment: {}
         });
-        logs.value.push(`🎊 ${user.username}道友，欢迎重返仙途！`);
+        logs.value.push(`🌟 ${user.username}道友，欢迎踏上仙途！已为你初始化所有修炼法门。`);
         break;
       case "S_Reconnected":
         logs.value.push(`🔄 ${msg.msg || "重连成功"}`);
@@ -262,15 +299,17 @@ function connectWS() {
         logs.value.push(`❌ 错误：${msg.msg}`);
         break;
       case "S_SeqStarted":
-        isRunning.value = true;
-        currentSeqLevel.value = msg.level || 1;
+        // 同步本地状态
+        if (msg.seq_id) {
+          selectedSeq.value = msg.seq_id;
+        }
+        // currentSeqLevel 是计算属性，不能直接赋值
+        // 通过更新 game store 来间接更新
         if (msg.seq_id && msg.level !== undefined) {
           seqLevels.value[msg.seq_id] = msg.level;
         }
-        if (msg.equipment_bonus) {
-          equipmentBonus.value = msg.equipment_bonus;
-        }
-        // activeSubProject 是计算属性，会自动从 game store 更新
+        // equipment_bonus 会在下面的 game.updatePlayerData 中自动更新
+        // activeSubProject 是计算属性，但为了同步本地状态也需要更新
         if (msg.sub_project_id) {
           selectedSubProject.value = msg.sub_project_id;
         }
@@ -288,26 +327,29 @@ function connectWS() {
           equipment_bonus: msg.equipment_bonus || game.equipmentBonus
         });
 
+        // 更新序列状态
+        game.updateSequenceStatus({
+          is_running: true,
+          seq_id: msg.seq_id,
+          seq_level: msg.level || 1,
+          active_sub_project: msg.sub_project_id || ""
+        });
+
         startProgressTimer();
-        logs.value.push(`🎯 开始${getSequenceName(msg.seq_id)}${formatSubProjectLabel(msg.sub_project_id)} - 当前境界：${currentSeqLevel.value}重`);
+        logs.value.push(`🎯 开始${getSequenceName(msg.seq_id)}${formatSubProjectLabel(msg.sub_project_id)} - 当前境界：${msg.level || 1}重`);
         break;
       case "S_SeqResult":
         gains.value += msg.gains || 0;
-        bag.value = msg.bag || {};
 
         // 立即重置进度条，与后端结算完全同步
         currentProgress.value = 0;
 
-        if (msg.level && msg.seq_id === selectedSeq.value) {
-          currentSeqLevel.value = msg.level;
-          currentSeqExp.value = msg.cur_exp || 0;
-        }
+        // currentSeqLevel 和 currentSeqExp 是计算属性，不能直接赋值
+        // 通过更新 game store 来间接更新
         if (msg.seq_id && msg.level) {
           seqLevels.value[msg.seq_id] = msg.level;
         }
-        if (msg.equipment_bonus) {
-          equipmentBonus.value = msg.equipment_bonus;
-        }
+        // equipment_bonus 会在下面的 game.updatePlayerData 中自动更新
 
         // 同时更新 game store，确保数据同步
         game.updatePlayerData({
@@ -317,6 +359,17 @@ function connectWS() {
           equipment: msg.equipment || game.equipment,
           equipment_bonus: msg.equipment_bonus || game.equipmentBonus
         });
+
+        // 更新序列状态（包括当前序列的经验和等级）
+        if (msg.seq_id === currentSeqId.value) {
+          game.updateSequenceStatus({
+            is_running: game.isRunning,
+            seq_id: msg.seq_id,
+            seq_level: msg.level || game.currentSeqLevel,
+            active_sub_project: msg.sub_project_id || game.activeSubProject,
+            current_seq_exp: msg.cur_exp || 0
+          });
+        }
         // activeSubProject 是计算属性，会自动从 game store 更新
         if (msg.rare && msg.rare.length > 0) {
           logs.value.push(`🌟 神秘书籍：${msg.rare.join(", ")}`);
@@ -335,7 +388,8 @@ function connectWS() {
                 id: itemId,
                 name: getItemName(itemId),
                 icon: getItemIcon(itemId),
-                count: 1
+                count: 1,
+                isEquipment: item.is_equipment || false // 添加装备标记
               };
             }
           });
@@ -357,38 +411,36 @@ function connectWS() {
         });
         break;
       case "S_SeqEnded":
-        isRunning.value = false;
+        // 使用服务器发送的状态信息更新 game store
+        game.updateSequenceStatus({
+          is_running: msg.is_running || false,
+          seq_id: msg.seq_id || "",
+          seq_level: msg.seq_level || 0,
+          active_sub_project: msg.active_sub_project || ""
+        });
+        // 同步本地的 selectedSubProject 状态
+        selectedSubProject.value = msg.active_sub_project || "";
         // activeSubProject 是计算属性，会自动从 game store 更新
         stopProgressTimer();
         logs.value.push("⏸️ 暂停修炼，道法自然");
         break;
       case "S_EquipmentState":
-        equipmentSlots.value = msg.equipment || {};
-        equipmentBonus.value = msg.bonus || defaultBonus;
-        if (msg.catalog) {
-          equipmentCatalog.value = msg.catalog;
-        }
-        if (msg.bag) {
-          bag.value = msg.bag;
-        }
+        // 通过 game store 更新装备状态
+        game.updateEquipment(msg.equipment || {});
+        game.updateBag(msg.bag || game.bag);
+        // equipmentCatalog 不需要更新，应该来自配置文件
+        // equipmentBonus 会在 updateEquipment 中自动重新计算
         break;
       case "S_EquipmentChanged":
-        equipmentSlots.value = msg.equipment || {};
-        equipmentBonus.value = msg.bonus || defaultBonus;
-        if (msg.bag) {
-          bag.value = msg.bag;
-        }
+        // 通过 game store 更新装备状态
+        game.updateEquipment(msg.equipment || {});
+        game.updateBag(msg.bag || game.bag);
+        // equipmentBonus 会在 updateEquipment 中自动重新计算
         logs.value.push("🛡️ 装备状态已更新");
         break;
       default:
         console.log("Unhandled:", msg);
     }
-  };
-
-  ws.value.onclose = () => {
-    logs.value.push("☁️ 仙缘暂断，重续仙缘中...");
-    setTimeout(connectWS, 5000);
-  };
 }
 
 function autoSelectSubProject(seqId) {
@@ -413,7 +465,7 @@ function autoSelectSubProject(seqId) {
 }
 
 function selectSequence(seqId) {
-  // 只选择序列，不进行任何切换操作
+  // 允许选择任何序列，但UI需要区分当前运行和选中状态
   selectedSeq.value = seqId;
   autoSelectSubProject(seqId);
 }
@@ -433,7 +485,13 @@ function handlePendingReconnection() {
   const seq = sequences.value.find((s) => s.id === pending.seq_id);
   if (seq) {
     selectedSeq.value = pending.seq_id;
-    currentSeqLevel.value = pending.seq_level;
+    // currentSeqLevel 是计算属性，通过更新 game store 来间接更新
+    game.updateSequenceStatus({
+      is_running: pending.is_running,
+      seq_id: pending.seq_id,
+      seq_level: pending.seq_level,
+      active_sub_project: pending.sub_project_id || ""
+    });
     // activeSubProject 是计算属性，会自动从 game store 更新
     autoSelectSubProject(pending.seq_id);
     if (pending.is_running) {
@@ -479,7 +537,7 @@ function restoreSequenceProgress(seq, pendingState) {
 }
 
 function startSeq() {
-  if (isRunning.value || !selectedSeq.value) return;
+  if (!selectedSeq.value) return;
 
   // 显示修炼配置弹窗
   showSeqConfig.value = true;
@@ -537,22 +595,20 @@ function confirmStartSeq() {
   }
 
   // 直接发送开始请求，后端会自动处理切换
-  ws.value?.send(
-    JSON.stringify({
-      type: "C_StartSeq",
-      seq_id: selectedSeq.value,
-      sub_project_id: subProjectId,
-      target: seqConfigTarget.value,
-      consumables: selectedConsumables.value
-    })
-  );
+  send({
+    type: "C_StartSeq",
+    seq_id: selectedSeq.value,
+    sub_project_id: subProjectId,
+    target: seqConfigTarget.value,
+    consumables: selectedConsumables.value
+  });
 
   showSeqConfig.value = false; // 关闭弹窗
 }
 
 function stopSeq() {
   stopProgressTimer();
-  ws.value?.send(JSON.stringify({ type: "C_StopSeq" }));
+  send({ type: "C_StopSeq" });
   // activeSubProject 是计算属性，不能直接赋值
   // 会在收到服务器的 S_SeqEnded 消息时自动更新
 }
@@ -583,12 +639,12 @@ function stopProgressTimer() {
 
 function equipItem(itemId) {
   if (!itemId) return;
-  ws.value?.send(JSON.stringify({ type: "C_EquipItem", item_id: itemId }));
+  send({ type: "C_EquipItem", item_id: itemId });
 }
 
 function unequipItem(slot) {
   if (!slot) return;
-  ws.value?.send(JSON.stringify({ type: "C_UnequipItem", slot }));
+  send({ type: "C_UnequipItem", slot });
 }
 
 function addItemNotification(item) {
@@ -861,6 +917,29 @@ function getSequenceDesc(seqId) {
 function formatBonus(value) {
   return `${Math.round((value || 0) * 100)}%`;
 }
+
+function getSubProjectBonus(seqId, subProjectId) {
+  if (!seqId || !subProjectId) return '';
+
+  const seq = sequences.value.find(s => s.id === seqId);
+  if (!seq || !seq.subProjects) return '';
+
+  const subProject = seq.subProjects.find(sp => sp.id === subProjectId);
+  if (!subProject) return '';
+
+  const bonuses = [];
+  if (subProject.gainMultiplier) {
+    bonuses.push(`灵气×${subProject.gainMultiplier.toFixed(2)}`);
+  }
+  if (subProject.expMultiplier && subProject.expMultiplier > 1) {
+    bonuses.push(`经验×${subProject.expMultiplier.toFixed(2)}`);
+  }
+  if (subProject.intervalMod) {
+    bonuses.push(`节奏×${subProject.intervalMod.toFixed(2)}`);
+  }
+
+  return bonuses.join(' · ') || '×1.00';
+}
 </script>
 
 
@@ -914,8 +993,8 @@ function formatBonus(value) {
       <div class="progress-header">
         <div class="progress-title-section">
           <h3 class="progress-title">
-            ⚡ {{ getSequenceName(selectedSeq) }}
-            <span v-if="selectedSubProject" class="progress-subproject">{{ formatSubProjectLabel(selectedSubProject) }}</span>
+            ⚡ {{ getSequenceName(currentSeqId) }}
+            <span v-if="activeSubProject" class="progress-subproject">{{ formatSubProjectLabel(activeSubProject) }}</span>
             <span v-if="currentSeqLevel > 0" class="progress-level">{{ currentSeqLevel }}重</span>
             <span class="progress-divider">|</span>
             <span class="progress-label">进度 {{ Math.round(currentProgress) }}%</span>
@@ -931,13 +1010,10 @@ function formatBonus(value) {
       </div>
       <div class="progress-info">
         <span class="progress-timing">
-          {{ serverTickInterval > 0 ? serverTickInterval.toFixed(2) : currentSequenceInterval.toFixed(2) }}秒/次
+          {{ serverTickInterval > 0 ? serverTickInterval.toFixed(2) : getSequenceInterval(currentSeqId, activeSubProject).toFixed(2) }}秒/次
         </span>
-        <span v-if="selectedSubProjectDetail" class="progress-bonus">
-          灵气×{{ selectedSubProjectDetail.gainMultiplier?.toFixed(2) || '1.00' }}
-          <span v-if="selectedSubProjectDetail.expMultiplier && selectedSubProjectDetail.expMultiplier > 1">
-            · 经验×{{ selectedSubProjectDetail.expMultiplier.toFixed(2) }}
-          </span>
+        <span v-if="activeSubProject" class="progress-bonus">
+          {{ getSubProjectBonus(currentSeqId, activeSubProject) }}
         </span>
       </div>
     </div>
@@ -965,7 +1041,7 @@ function formatBonus(value) {
           v-for="s in sequences"
           :key="s.id"
           class="sequence-card"
-          :class="{ active: selectedSeq === s.id, running: isRunning && selectedSeq === s.id }"
+          :class="{ active: selectedSeq === s.id, running: isRunning && currentSeqId === s.id }"
           @click="selectSequence(s.id)"
         >
           <div class="sequence-icon">
@@ -979,10 +1055,10 @@ function formatBonus(value) {
           <div class="sequence-time">{{ getSequenceInterval(s.id, '') }}秒/次</div>
 
           <!-- 运行状态指示 -->
-          <div v-if="isRunning && selectedSeq === s.id" class="sequence-running-status">
+          <div v-if="isRunning && currentSeqId === s.id" class="sequence-running-status">
             ⏸️ 运行中
           </div>
-          <div v-else-if="isRunning && selectedSeq !== s.id" class="sequence-other-status">
+          <div v-else-if="isRunning && currentSeqId !== s.id" class="sequence-other-status">
             运行其他序列
           </div>
         </div>
@@ -1015,14 +1091,15 @@ function formatBonus(value) {
           <!-- 子项目操作按钮 -->
           <div class="subproject-actions">
             <button
-              v-if="selectedSubProject === sp.id && sp.unlocked && !isRunning"
+              v-if="selectedSubProject === sp.id && sp.unlocked"
               @click="startSeq"
               class="subproject-start-btn"
+              :class="{ 'switch-mode': isRunning && activeSubProject === sp.id }"
             >
-              🚀 开始修炼
+              {{ isRunning && activeSubProject === sp.id ? '🔄 切换设置' : '🚀 开始修炼' }}
             </button>
             <div
-              v-else-if="selectedSubProject === sp.id && sp.unlocked && isRunning && currentSeqId === selectedSeq && activeSubProject === selectedSubProject"
+              v-else-if="sp.unlocked && isRunning && currentSeqId === selectedSeq && activeSubProject === sp.id"
               class="subproject-running-indicator"
             >
               ⏸️ 运行中
@@ -1241,7 +1318,7 @@ function formatBonus(value) {
     <div v-if="showSeqConfig" class="config-modal-overlay" @click.self="showSeqConfig = false">
       <div class="config-modal">
         <div class="config-modal-header">
-          <h3 class="config-modal-title">⚙️ 修炼配置</h3>
+          <h3 class="config-modal-title">⚙️ {{ isRunning ? '切换修炼' : '修炼配置' }}</h3>
           <button @click="showSeqConfig = false" class="config-modal-close">×</button>
         </div>
 
@@ -1608,6 +1685,22 @@ function formatBonus(value) {
   box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
   width: 100%;
   animation: subprojectStartBtnPulse 2s ease-in-out infinite;
+}
+
+.subproject-start-btn.switch-mode {
+  background: linear-gradient(45deg, #ff9800, #ff6b6b);
+  animation: switchModePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes switchModePulse {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(255, 152, 0, 0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(255, 152, 0, 0.6);
+    transform: scale(1.02);
+  }
 }
 
 @keyframes subprojectStartBtnPulse {

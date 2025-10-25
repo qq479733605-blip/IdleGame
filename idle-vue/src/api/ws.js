@@ -12,10 +12,6 @@ export function connectWS(token) {
     ws.onopen = () => {
         console.log('[WS] connected')
         send({ type: 'C_Login', token })
-        // 立即请求序列列表，确保重连时能获取序列数据
-        setTimeout(() => {
-            send({ type: 'C_ListSeq' })
-        }, 100)
 
         const player = useUserStore()
         console.log('WS connected')

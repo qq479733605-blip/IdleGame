@@ -6,7 +6,8 @@
       "Bash(npm run dev:*)",
       "Bash(python3:*)",
       "Bash(chmod:*)",
-      "Bash(./sync-config.sh:*)"
+      "Bash(./sync-config.sh:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

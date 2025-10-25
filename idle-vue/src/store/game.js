@@ -110,9 +110,9 @@ export const useGameStore = defineStore("game", {
         rare_chance_bonus: 0
       };
 
-      for (const [slot, itemId] of Object.entries(this.equipment)) {
-        if (itemId && this.equipmentCatalog[itemId]) {
-          const item = this.equipmentCatalog[itemId];
+      for (const [slot, equipmentData] of Object.entries(this.equipment)) {
+        if (equipmentData && equipmentData.item_id && this.equipmentCatalog[equipmentData.item_id]) {
+          const item = this.equipmentCatalog[equipmentData.item_id];
           const attrs = item.attributes;
 
           totalBonus.exp_multiplier += attrs.exp_multiplier || 0;
