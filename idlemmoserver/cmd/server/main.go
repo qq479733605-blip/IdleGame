@@ -36,20 +36,26 @@ func main() {
 		return actors.NewPersistActor(repo)
 	}))
 
+	// 4) 用户仓库 + AuthActor
+	userRepo := persist.NewJSONUserRepo("users")
+	authPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
+		return actors.NewAuthActor(userRepo)
+	}))
+
 	schedulerPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
 		return actors.NewSchedulerActor()
 	}))
 
-	// 4) 设置全局persistPID、schedulerPID
+	// 5) 设置全局persistPID、schedulerPID
 	gateway.SetPersistPID(persistPID)
 	gateway.SetSchedulerPID(schedulerPID)
 
-	// 5) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
-	gatewayPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
+	// 6) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
+	_ = root.Spawn(actor.PropsFromProducer(func() actor.Actor {
 		return actors.NewGatewayActor(root, persistPID, schedulerPID)
 	}))
 
-	// 6) HTTP/WS 路由
+	// 7) HTTP/WS 路由
 	r := gin.Default()
 	// ✅ 加上 CORS 中间件
 	r.Use(cors.New(cors.Config{
@@ -60,7 +66,7 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	gateway.InitRoutes(r, root, gatewayPID)
+	gateway.InitRoutes(r, root, authPID)
 
 	log.Println("✅ loaded sequences config, server started :8080")
 	if err := r.Run(":8080"); err != nil {

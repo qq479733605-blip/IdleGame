@@ -90,3 +90,51 @@ type SeqStop struct{}
 type MsgUpdateEquipmentBonus struct {
 	Bonus domain.EquipmentBonus
 }
+
+// —— 用户认证相关消息 ——
+type MsgRegisterUser struct {
+	Username string
+	Password string
+	ReplyTo  *actor.PID
+}
+
+type MsgRegisterUserResult struct {
+	Success  bool
+	Message  string
+	PlayerID string
+}
+
+type MsgAuthenticateUser struct {
+	Username string
+	Password string
+	ReplyTo  *actor.PID
+}
+
+type MsgAuthenticateUserResult struct {
+	Success  bool
+	Message  string
+	PlayerID string
+}
+
+type MsgGetUserByPlayerID struct {
+	PlayerID string
+	ReplyTo  *actor.PID
+}
+
+type MsgGetUserByPlayerIDResult struct {
+	User   *domain.UserData
+	Exists bool
+}
+
+// 客户端消息类型
+type CRegister struct {
+	Type     string `json:"type"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type CLoginAuth struct {
+	Type     string `json:"type"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}

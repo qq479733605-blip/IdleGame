@@ -1,37 +1,62 @@
 <script setup>
 import { ref, onMounted, computed, watch } from "vue";
 import { useUserStore } from "../store/user";
+import { useGameStore } from "../store/game";
+import { gameConfig } from "../config";
 
 const user = useUserStore();
+const game = useGameStore();
 const ws = ref(null);
 
-const sequences = ref([]);
 const selectedSeq = ref("");
 const selectedSubProject = ref("");
-const bag = ref({});
 const gains = ref(0);
-const isRunning = ref(false);
 const logs = ref([]);
-const playerLevel = ref(1);
-const playerExp = ref(0);
-const currentSeqLevel = ref(1);
-const currentSeqExp = ref(0);
-const seqProgress = ref(0);
-const seqInterval = ref(3);
 const progressTimer = ref(null);
+const currentProgress = ref(0); // 修炼进度条进度
+const serverTickInterval = ref(0); // 后端发送的准确间隔时间（秒）
 const itemNotifications = ref([]);
 const notificationId = ref(0);
 const showOfflineReward = ref(false);
 const offlineRewardData = ref(null);
 const showSeqReward = ref(false);
 const seqRewardData = ref(null);
-const seqLevels = ref({});
-const equipmentSlots = ref({});
-const equipmentBonus = ref({ gain_multiplier: 0, rare_chance_bonus: 0, exp_multiplier: 0 });
-const equipmentCatalog = ref({});
-const activeSubProject = ref("");
 const isLoading = ref(true);
-const showLoginScreen = ref(true);
+
+// 修炼配置弹窗
+const showSeqConfig = ref(false);
+const seqConfigTarget = ref(100);
+const seqConfigConsumables = ref({});
+const selectedConsumables = ref({});
+
+// 使用 store 的计算属性
+const sequences = computed(() => game.sequences);
+const bag = computed(() => game.bag);
+const isRunning = computed(() => game.isRunning);
+const playerExp = computed(() => game.exp);
+const currentSeqLevel = computed(() => game.currentSeqLevel);
+const currentSeqExp = computed(() => game.currentSeqExp);
+const seqLevels = computed(() => game.seqLevels);
+const equipmentSlots = computed(() => game.equipment);
+const equipmentBonus = computed(() => game.equipmentBonus);
+const equipmentCatalog = computed(() => game.equipmentCatalog);
+const activeSubProject = computed(() => game.activeSubProject);
+const currentSeqId = computed(() => game.currentSeqId);
+
+// 计算序列进度
+const seqProgress = computed(() => {
+  if (!currentSeqId.value) return 0;
+  const config = gameConfig.getSequenceConfig(currentSeqId.value);
+  if (!config) return 0;
+  if (config.levelup_exp === 0) return 0; // 防止除零错误
+  return Math.min(currentSeqExp.value / config.levelup_exp, 1); // 限制在0-1之间
+});
+
+// 计算序列时间间隔
+const seqInterval = computed(() => {
+  if (!currentSeqId.value) return 3;
+  return gameConfig.getEffectiveInterval(currentSeqId.value, activeSubProject.value) / 1000;
+});
 
 const equipmentSlotOrder = ["weapon", "armor", "head", "hand", "foot", "relic"];
 const equipmentSlotName = {
@@ -44,6 +69,16 @@ const equipmentSlotName = {
 };
 
 const defaultBonus = { gain_multiplier: 0, rare_chance_bonus: 0, exp_multiplier: 0 };
+
+// 根据经验计算玩家等级
+const playerLevel = computed(() => {
+  const exp = playerExp.value;
+  if (exp < 100) return 1;      // 凡人
+  if (exp < 500) return 5;      // 炼气
+  if (exp < 2000) return 10;    // 筑基
+  if (exp < 8000) return 20;    // 金丹
+  return 30;                     // 元婴
+});
 
 const cultivationRealm = computed(() => {
   const realms = [
@@ -63,22 +98,26 @@ const cultivationRealm = computed(() => {
 });
 
 const selectedSequence = computed(() => sequences.value.find((s) => s.id === selectedSeq.value) || null);
+const selectedSequenceConfig = computed(() => {
+  if (!selectedSeq.value) return null;
+  return gameConfig.getSequenceConfig(selectedSeq.value);
+});
 const availableSubProjects = computed(() => {
   const seq = selectedSequence.value;
-  if (!seq || !seq.sub_projects) return [];
+  if (!seq || !seq.subProjects) return [];
   const level = getSequenceLevel(seq.id);
-  return seq.sub_projects
+  return seq.subProjects
     .map((sp) => ({
       ...sp,
-      unlocked: level >= (sp.unlock_level || 0)
+      unlocked: level >= (sp.unlockLevel || 0)
     }))
-    .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+    .sort((a, b) => (a.unlockLevel || 0) - (b.unlockLevel || 0));
 });
 
 const selectedSubProjectDetail = computed(() => {
   const seq = selectedSequence.value;
-  if (!seq || !seq.sub_projects) return null;
-  return seq.sub_projects.find((sp) => sp.id === selectedSubProject.value) || null;
+  if (!seq || !seq.subProjects) return null;
+  return seq.subProjects.find((sp) => sp.id === selectedSubProject.value) || null;
 });
 
 const formattedEquipmentBonus = computed(() => ({
@@ -115,10 +154,13 @@ const inventoryEntries = computed(() =>
 );
 
 onMounted(() => {
+  // 初始化游戏配置（本地加载，不需要网络请求）
+  game.initializeGame();
+
   setTimeout(() => {
     isLoading.value = false;
     connectWS();
-  }, 2000);
+  }, 1000); // 减少加载时间，因为配置已经是本地了
 });
 
 watch(selectedSeq, (newSeq) => {
@@ -131,30 +173,41 @@ function connectWS() {
 
   ws.value.onopen = () => {
     logs.value.push("🌟 仙缘已定，开始你的修仙之旅！");
-    ws.value.send(JSON.stringify({ type: "C_ListSeq" }));
-    ws.value.send(JSON.stringify({ type: "C_ListEquipment" }));
+    // 配置现在是本地的，不需要请求
   };
 
   ws.value.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     switch (msg.type) {
       case "S_LoginOK":
-        playerExp.value = msg.exp || 0;
+        game.updatePlayerData({
+          exp: msg.exp,
+          seq_levels: {},
+          bag: {},
+          equipment: {}
+        });
         logs.value.push(`🎊 ${user.username}道友，欢迎重返仙途！`);
         break;
       case "S_Reconnected":
         logs.value.push(`🔄 ${msg.msg || "重连成功"}`);
-        playerExp.value = msg.exp || 0;
-        bag.value = msg.bag || {};
-        equipmentSlots.value = msg.equipment || {};
-        equipmentBonus.value = msg.equipment_bonus || defaultBonus;
-        if (msg.equipment_catalog) {
-          equipmentCatalog.value = msg.equipment_catalog;
-        }
-        if (msg.seq_levels) {
-          seqLevels.value = msg.seq_levels;
-        }
-        activeSubProject.value = msg.active_sub_project || "";
+
+        // 使用 game store 更新数据
+        game.updatePlayerData({
+          exp: msg.exp,
+          seq_levels: msg.seq_levels,
+          bag: msg.bag,
+          equipment: msg.equipment,
+          equipment_bonus: msg.equipment_bonus
+        });
+
+        game.updateSequenceStatus({
+          is_running: msg.is_running,
+          seq_id: msg.seq_id,
+          seq_level: msg.seq_level,
+          active_sub_project: msg.active_sub_project
+        });
+
+        // 处理重连状态
         if (msg.seq_id && msg.seq_level !== undefined) {
           window.pendingReconnectionState = {
             seq_id: msg.seq_id,
@@ -163,15 +216,12 @@ function connectWS() {
             sub_project_id: msg.active_sub_project || ""
           };
           selectedSeq.value = msg.seq_id;
-          currentSeqLevel.value = msg.seq_level;
           if (msg.is_running) {
-            isRunning.value = true;
+            startProgressTimer();
           } else {
-            isRunning.value = false;
             stopProgressTimer();
           }
         } else {
-          isRunning.value = false;
           stopProgressTimer();
         }
         break;
@@ -182,15 +232,20 @@ function connectWS() {
           items: msg.offline_items || {}
         };
         if (msg.bag) {
-          bag.value = msg.bag;
+          game.updateBag(msg.bag);
         }
         showOfflineReward.value = true;
         break;
-      case "S_ListSeq":
-        sequences.value = msg.sequences || [];
-        if (msg.equipment_catalog) {
-          equipmentCatalog.value = msg.equipment_catalog;
-        }
+      case "S_LoadOK":
+        // 更新游戏数据
+        game.updatePlayerData({
+          exp: msg.exp,
+          seq_levels: msg.seq_levels,
+          bag: msg.bag,
+          equipment: msg.equipment,
+          equipment_bonus: msg.equipment_bonus
+        });
+
         if (window.pendingReconnectionState) {
           handlePendingReconnection();
         } else if (!selectedSeq.value && sequences.value.length > 0) {
@@ -200,11 +255,11 @@ function connectWS() {
           autoSelectSubProject(selectedSeq.value);
         }
         break;
-      case "S_LoadOK":
-        playerExp.value = msg.exp || 0;
-        bag.value = msg.bag || {};
-        equipmentSlots.value = msg.equipment || {};
-        equipmentBonus.value = msg.equipment_bonus || defaultBonus;
+      case "S_Error":
+      case "S_Err":
+        // 处理后端错误消息
+        console.error("服务器错误:", msg.msg);
+        logs.value.push(`❌ 错误：${msg.msg}`);
         break;
       case "S_SeqStarted":
         isRunning.value = true;
@@ -215,17 +270,34 @@ function connectWS() {
         if (msg.equipment_bonus) {
           equipmentBonus.value = msg.equipment_bonus;
         }
-        activeSubProject.value = msg.sub_project_id || "";
+        // activeSubProject 是计算属性，会自动从 game store 更新
         if (msg.sub_project_id) {
           selectedSubProject.value = msg.sub_project_id;
         }
-        seqInterval.value = msg.tick_interval || getSequenceInterval(msg.seq_id, msg.sub_project_id);
+        // 存储后端发送的准确间隔时间
+        if (msg.tick_interval) {
+          serverTickInterval.value = msg.tick_interval;
+        }
+
+        // 更新 game store 中的序列等级数据
+        game.updatePlayerData({
+          exp: msg.exp || game.exp,
+          seq_levels: seqLevels.value,
+          bag: game.bag,
+          equipment: game.equipment,
+          equipment_bonus: msg.equipment_bonus || game.equipmentBonus
+        });
+
         startProgressTimer();
         logs.value.push(`🎯 开始${getSequenceName(msg.seq_id)}${formatSubProjectLabel(msg.sub_project_id)} - 当前境界：${currentSeqLevel.value}重`);
         break;
       case "S_SeqResult":
         gains.value += msg.gains || 0;
         bag.value = msg.bag || {};
+
+        // 立即重置进度条，与后端结算完全同步
+        currentProgress.value = 0;
+
         if (msg.level && msg.seq_id === selectedSeq.value) {
           currentSeqLevel.value = msg.level;
           currentSeqExp.value = msg.cur_exp || 0;
@@ -236,9 +308,16 @@ function connectWS() {
         if (msg.equipment_bonus) {
           equipmentBonus.value = msg.equipment_bonus;
         }
-        if (msg.sub_project_id) {
-          activeSubProject.value = msg.sub_project_id;
-        }
+
+        // 同时更新 game store，确保数据同步
+        game.updatePlayerData({
+          exp: msg.exp || game.exp,
+          seq_levels: seqLevels.value,
+          bag: msg.bag || game.bag,
+          equipment: msg.equipment || game.equipment,
+          equipment_bonus: msg.equipment_bonus || game.equipmentBonus
+        });
+        // activeSubProject 是计算属性，会自动从 game store 更新
         if (msg.rare && msg.rare.length > 0) {
           logs.value.push(`🌟 神秘书籍：${msg.rare.join(", ")}`);
         }
@@ -279,7 +358,7 @@ function connectWS() {
         break;
       case "S_SeqEnded":
         isRunning.value = false;
-        activeSubProject.value = "";
+        // activeSubProject 是计算属性，会自动从 game store 更新
         stopProgressTimer();
         logs.value.push("⏸️ 暂停修炼，道法自然");
         break;
@@ -314,29 +393,35 @@ function connectWS() {
 
 function autoSelectSubProject(seqId) {
   const seq = sequences.value.find((s) => s.id === seqId);
-  if (!seq || !seq.sub_projects) {
+  if (!seq || !seq.subProjects) {
     selectedSubProject.value = "";
     return;
   }
   const level = getSequenceLevel(seqId);
-  if (activeSubProject.value && seq.sub_projects.find((sp) => sp.id === activeSubProject.value)) {
+  if (activeSubProject.value && seq.subProjects.find((sp) => sp.id === activeSubProject.value)) {
     selectedSubProject.value = activeSubProject.value;
     return;
   }
-  const unlocked = seq.sub_projects
-    .filter((sp) => level >= (sp.unlock_level || 0))
-    .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+  const unlocked = seq.subProjects
+    .filter((sp) => level >= (sp.unlockLevel || 0))
+    .sort((a, b) => (a.unlockLevel || 0) - (b.unlockLevel || 0));
   if (unlocked.length > 0) {
     selectedSubProject.value = unlocked[unlocked.length - 1].id;
   } else {
-    selectedSubProject.value = seq.sub_projects[0].id;
+    selectedSubProject.value = seq.subProjects[0].id;
   }
+}
+
+function selectSequence(seqId) {
+  // 只选择序列，不进行任何切换操作
+  selectedSeq.value = seqId;
+  autoSelectSubProject(seqId);
 }
 
 function selectSubProject(sp) {
   if (!sp) return;
   if (!sp.unlocked) {
-    logs.value.push(`🔒 ${sp.name} 需要达到 ${sp.unlock_level} 重境界`);
+    logs.value.push(`🔒 ${sp.name} 需要达到 ${sp.unlockLevel} 重境界`);
     return;
   }
   selectedSubProject.value = sp.id;
@@ -349,7 +434,7 @@ function handlePendingReconnection() {
   if (seq) {
     selectedSeq.value = pending.seq_id;
     currentSeqLevel.value = pending.seq_level;
-    activeSubProject.value = pending.sub_project_id || "";
+    // activeSubProject 是计算属性，会自动从 game store 更新
     autoSelectSubProject(pending.seq_id);
     if (pending.is_running) {
       isRunning.value = true;
@@ -373,14 +458,14 @@ function tryRestoreSequenceProgress() {
 }
 
 function restoreSequenceProgress(seq, pendingState) {
-  activeSubProject.value = pendingState.sub_project_id || "";
+  // activeSubProject 是计算属性，会自动从 game store 更新
   if (pendingState.sub_project_id) {
     selectedSubProject.value = pendingState.sub_project_id;
   }
-  seqInterval.value = getSequenceInterval(seq.id, pendingState.sub_project_id);
-  seqProgress.value = Math.random() * 80;
+  // 移除 seqInterval 赋值，因为它是计算属性
+  currentProgress.value = Math.random() * 80;
   startProgressTimer();
-  logs.value.push(`♻️ 恢复修炼：${seq.name}${formatSubProjectLabel(pendingState.sub_project_id)}，进度${Math.round(seqProgress.value)}%`);
+  logs.value.push(`♻️ 恢复修炼：${seq.name}${formatSubProjectLabel(pendingState.sub_project_id)}，进度${Math.round(currentProgress.value)}%`);
   seqRewardData.value = {
     gains: 0,
     items: [],
@@ -395,56 +480,105 @@ function restoreSequenceProgress(seq, pendingState) {
 
 function startSeq() {
   if (isRunning.value || !selectedSeq.value) return;
+
+  // 显示修炼配置弹窗
+  showSeqConfig.value = true;
+  seqConfigTarget.value = 100; // 默认目标
+  selectedConsumables.value = {}; // 清空选择的消耗品
+}
+
+function calculateExpectedGains() {
+  const seqId = selectedSeq.value;
+  if (!seqId) return 0;
+
+  const seqConfig = gameConfig.getSequenceConfig(seqId);
+  if (!seqConfig) return 0;
+
+  const level = getSequenceLevel(seqId);
+  const subProject = selectedSubProjectDetail.value;
+
+  let baseGain = seqConfig.base_gain || 0;
+  let growthFactor = seqConfig.growth_factor || 0;
+
+  // 计算基础收益
+  let gains = baseGain + Math.floor(level * growthFactor);
+
+  // 应用子项目修正
+  if (subProject && subProject.gainMultiplier) {
+    gains = Math.floor(gains * subProject.gainMultiplier);
+  }
+
+  // 应用装备加成
+  if (equipmentBonus.value && equipmentBonus.value.gain_multiplier) {
+    gains = Math.floor(gains * (1 + equipmentBonus.value.gain_multiplier));
+  }
+
+  return gains;
+}
+
+function confirmStartSeq() {
   const seq = selectedSequence.value;
   let subProjectId = selectedSubProject.value;
-  if (seq && seq.sub_projects && seq.sub_projects.length > 0) {
-    const targetSub = seq.sub_projects.find((sp) => sp.id === subProjectId);
+  if (seq && seq.subProjects && seq.subProjects.length > 0) {
+    const targetSub = seq.subProjects.find((sp) => sp.id === subProjectId);
     const level = getSequenceLevel(seq.id);
-    if (!targetSub || level < (targetSub.unlock_level || 0)) {
-      const unlocked = seq.sub_projects
-        .filter((sp) => level >= (sp.unlock_level || 0))
-        .sort((a, b) => (a.unlock_level || 0) - (b.unlock_level || 0));
+    if (!targetSub || level < (targetSub.unlockLevel || 0)) {
+      const unlocked = seq.subProjects
+        .filter((sp) => level >= (sp.unlockLevel || 0))
+        .sort((a, b) => (a.unlockLevel || 0) - (b.unlockLevel || 0));
       if (unlocked.length > 0) {
         subProjectId = unlocked[unlocked.length - 1].id;
         selectedSubProject.value = subProjectId;
       } else {
-        subProjectId = seq.sub_projects[0].id;
+        subProjectId = seq.subProjects[0].id;
         selectedSubProject.value = subProjectId;
       }
     }
   }
-  seqInterval.value = getSequenceInterval(selectedSeq.value, subProjectId);
-  startProgressTimer();
+
+  // 直接发送开始请求，后端会自动处理切换
   ws.value?.send(
     JSON.stringify({
       type: "C_StartSeq",
       seq_id: selectedSeq.value,
       sub_project_id: subProjectId,
-      target: 100
+      target: seqConfigTarget.value,
+      consumables: selectedConsumables.value
     })
   );
+
+  showSeqConfig.value = false; // 关闭弹窗
 }
 
 function stopSeq() {
   stopProgressTimer();
   ws.value?.send(JSON.stringify({ type: "C_StopSeq" }));
-  activeSubProject.value = "";
+  // activeSubProject 是计算属性，不能直接赋值
+  // 会在收到服务器的 S_SeqEnded 消息时自动更新
 }
 
 function startProgressTimer() {
-  seqProgress.value = 0;
+  currentProgress.value = 0;
   clearInterval(progressTimer.value);
+
+  // 优先使用后端发送的准确间隔时间，如果没有则使用前端计算的时间
+  const intervalSeconds = serverTickInterval.value > 0 ? serverTickInterval.value : currentSequenceInterval.value;
+
   progressTimer.value = setInterval(() => {
-    seqProgress.value += 100 / (seqInterval.value * 10);
-    if (seqProgress.value >= 100) {
-      seqProgress.value = 0;
+    // 使用后端发送的准确间隔时间（秒），转换为毫秒
+    const intervalMs = intervalSeconds * 1000;
+    const increment = 100 / (intervalMs / 100); // 每100ms增加的百分比
+    currentProgress.value += increment;
+    if (currentProgress.value >= 100) {
+      currentProgress.value = 0;
     }
   }, 100);
 }
 
 function stopProgressTimer() {
   clearInterval(progressTimer.value);
-  seqProgress.value = 0;
+  currentProgress.value = 0;
+  serverTickInterval.value = 0; // 清除服务器间隔时间
 }
 
 function equipItem(itemId) {
@@ -502,24 +636,26 @@ function getSequenceName(seqId) {
 }
 
 function getSequenceLevel(seqId) {
-  return seqLevels.value[seqId] || 0;
+  return seqLevels.value[seqId] || 1; // 默认等级为1，而不是0
 }
 
 function getSequenceInterval(seqId, subProjectId) {
-  const seq = sequences.value.find((s) => s.id === seqId);
-  if (!seq) return 3;
-  let interval = seq.tick_interval || 3;
-  const sub = (seq.sub_projects || []).find((sp) => sp.id === (subProjectId || selectedSubProject.value));
-  if (sub && sub.interval_modifier) {
-    interval = interval * sub.interval_modifier;
+  const seqConfig = gameConfig.getSequenceConfig(seqId);
+  if (!seqConfig) return 3;
+  let interval = seqConfig.tick_interval || 3;
+
+  // 获取子项目配置
+  const subConfig = gameConfig.getSubProject(seqId, subProjectId || selectedSubProject.value);
+  if (subConfig && subConfig.interval_modifier) {
+    interval = interval * subConfig.interval_modifier;
   }
   return Math.max(interval, 0.5);
 }
 
 function formatSubProjectLabel(subProjectId) {
   if (!subProjectId) return "";
-  const seq = selectedSequence.value || sequences.value.find((s) => s.sub_projects?.some((sp) => sp.id === subProjectId));
-  const sub = seq?.sub_projects?.find((sp) => sp.id === subProjectId);
+  const seq = selectedSequence.value || sequences.value.find((s) => s.subProjects?.some((sp) => sp.id === subProjectId));
+  const sub = seq?.subProjects?.find((sp) => sp.id === subProjectId);
   return sub ? ` · ${sub.name}` : "";
 }
 
@@ -775,15 +911,34 @@ function formatBonus(value) {
 
     <!-- 修炼进度条 -->
     <div v-if="isRunning" class="progress-panel">
-      <h3 class="progress-title">
-        ⚡ {{ getSequenceName(selectedSeq) }}
-        <span v-if="currentSeqLevel > 0" class="progress-level">{{ currentSeqLevel }}重</span>
-        <span class="progress-divider">|</span>
-        <span class="progress-label">进度</span>
-      </h3>
+      <div class="progress-header">
+        <div class="progress-title-section">
+          <h3 class="progress-title">
+            ⚡ {{ getSequenceName(selectedSeq) }}
+            <span v-if="selectedSubProject" class="progress-subproject">{{ formatSubProjectLabel(selectedSubProject) }}</span>
+            <span v-if="currentSeqLevel > 0" class="progress-level">{{ currentSeqLevel }}重</span>
+            <span class="progress-divider">|</span>
+            <span class="progress-label">进度 {{ Math.round(currentProgress) }}%</span>
+          </h3>
+        </div>
+        <button @click="stopSeq" class="progress-stop-btn">
+          ⏸️ 停止修炼
+        </button>
+      </div>
       <div class="progress-bar-container">
-        <div class="progress-bar" :style="{ width: seqProgress + '%' }"></div>
-        <div class="progress-text">{{ Math.round(seqProgress) }}%</div>
+        <div class="progress-bar" :style="{ width: currentProgress + '%' }"></div>
+        <div class="progress-text">{{ Math.round(currentProgress) }}%</div>
+      </div>
+      <div class="progress-info">
+        <span class="progress-timing">
+          {{ serverTickInterval > 0 ? serverTickInterval.toFixed(2) : currentSequenceInterval.toFixed(2) }}秒/次
+        </span>
+        <span v-if="selectedSubProjectDetail" class="progress-bonus">
+          灵气×{{ selectedSubProjectDetail.gainMultiplier?.toFixed(2) || '1.00' }}
+          <span v-if="selectedSubProjectDetail.expMultiplier && selectedSubProjectDetail.expMultiplier > 1">
+            · 经验×{{ selectedSubProjectDetail.expMultiplier.toFixed(2) }}
+          </span>
+        </span>
       </div>
     </div>
 
@@ -811,7 +966,7 @@ function formatBonus(value) {
           :key="s.id"
           class="sequence-card"
           :class="{ active: selectedSeq === s.id, running: isRunning && selectedSeq === s.id }"
-          @click="!isRunning && (selectedSeq = s.id)"
+          @click="selectSequence(s.id)"
         >
           <div class="sequence-icon">
             {{ getSequenceIcon(s.id) }}
@@ -821,7 +976,15 @@ function formatBonus(value) {
           </div>
           <div class="sequence-name">{{ s.name }}</div>
           <div class="sequence-desc">{{ getSequenceDesc(s.id) }}</div>
-          <div class="sequence-time">{{ s.tick_interval }}秒/次</div>
+          <div class="sequence-time">{{ getSequenceInterval(s.id, '') }}秒/次</div>
+
+          <!-- 运行状态指示 -->
+          <div v-if="isRunning && selectedSeq === s.id" class="sequence-running-status">
+            ⏸️ 运行中
+          </div>
+          <div v-else-if="isRunning && selectedSeq !== s.id" class="sequence-other-status">
+            运行其他序列
+          </div>
         </div>
       </div>
 
@@ -833,49 +996,58 @@ function formatBonus(value) {
             :key="sp.id"
             class="subproject-card"
             :class="{ active: selectedSubProject === sp.id, locked: !sp.unlocked }"
-            @click="selectSubProject(sp)"
           >
-            <div class="subproject-name">
-              {{ sp.name }}
-              <span v-if="!sp.unlocked" class="subproject-lock">🔒 {{ sp.unlock_level }}重</span>
-            </div>
-            <div class="subproject-desc">{{ sp.description }}</div>
-            <div class="subproject-meta">
-              <span v-if="sp.gain_multiplier">灵气×{{ sp.gain_multiplier.toFixed(2) }}</span>
-              <span v-if="sp.exp_multiplier">经验×{{ sp.exp_multiplier.toFixed(2) }}</span>
-              <span v-if="sp.interval_modifier">节奏×{{ sp.interval_modifier.toFixed(2) }}</span>
+          <div class="subproject-header" @click="selectSubProject(sp)">
+            <div class="subproject-info">
+              <div class="subproject-name">
+                {{ sp.name }}
+                <span v-if="!sp.unlocked" class="subproject-lock">🔒 {{ sp.unlockLevel }}重</span>
+              </div>
+              <div class="subproject-desc">{{ sp.description }}</div>
+              <div class="subproject-meta">
+                <span v-if="sp.gainMultiplier">灵气×{{ sp.gainMultiplier.toFixed(2) }}</span>
+                <span v-if="sp.expMultiplier">经验×{{ sp.expMultiplier.toFixed(2) }}</span>
+                <span v-if="sp.intervalMod">节奏×{{ sp.intervalMod.toFixed(2) }}</span>
+              </div>
             </div>
           </div>
+
+          <!-- 子项目操作按钮 -->
+          <div class="subproject-actions">
+            <button
+              v-if="selectedSubProject === sp.id && sp.unlocked && !isRunning"
+              @click="startSeq"
+              class="subproject-start-btn"
+            >
+              🚀 开始修炼
+            </button>
+            <div
+              v-else-if="selectedSubProject === sp.id && sp.unlocked && isRunning && currentSeqId === selectedSeq && activeSubProject === selectedSubProject"
+              class="subproject-running-indicator"
+            >
+              ⏸️ 运行中
+            </div>
+            <div
+              v-else-if="!sp.unlocked"
+              class="subproject-locked-indicator"
+            >
+              🔒 需要解锁
+            </div>
+          </div>
+        </div>
         </div>
         <div v-if="selectedSubProjectDetail" class="subproject-detail">
           <div class="detail-line">当前子项目：<strong>{{ selectedSubProjectDetail.name }}</strong></div>
           <div class="detail-bonus">
-            灵气 {{ selectedSubProjectDetail.gain_multiplier ? `×${selectedSubProjectDetail.gain_multiplier.toFixed(2)}` : "×1.00" }} ·
-            稀有 {{ formatBonus(selectedSubProjectDetail.rare_chance_bonus) }} ·
-            经验 {{ selectedSubProjectDetail.exp_multiplier ? `×${selectedSubProjectDetail.exp_multiplier.toFixed(2)}` : "×1.00" }} ·
-            节奏 {{ selectedSubProjectDetail.interval_modifier ? `×${selectedSubProjectDetail.interval_modifier.toFixed(2)}` : "×1.00" }}
+            灵气 {{ selectedSubProjectDetail.gainMultiplier ? `×${selectedSubProjectDetail.gainMultiplier.toFixed(2)}` : "×1.00" }} ·
+            稀有 {{ formatBonus(selectedSubProjectDetail.rareBonus) }} ·
+            经验 {{ selectedSubProjectDetail.expMultiplier ? `×${selectedSubProjectDetail.expMultiplier.toFixed(2)}` : "×1.00" }} ·
+            节奏 {{ selectedSubProjectDetail.intervalMod ? `×${selectedSubProjectDetail.intervalMod.toFixed(2)}` : "×1.00" }}
           </div>
         </div>
       </div>
 
-      <div class="action-buttons">
-        <button
-          v-if="!isRunning"
-          @click="startSeq"
-          class="btn btn-primary"
-          :disabled="!selectedSeq"
-        >
-          🚀 开始修炼 ({{ currentSequenceInterval.toFixed(2) }}秒/次)
-        </button>
-        <button
-          v-else
-          @click="stopSeq"
-          class="btn btn-danger"
-        >
-          ⏸️ 停止修炼
-        </button>
       </div>
-    </div>
 
     <div class="equipment-panel">
       <h2 class="panel-title">⚔️ 神兵装备</h2>
@@ -1060,6 +1232,127 @@ function formatBonus(value) {
         <div class="reward-actions">
           <button @click="confirmOfflineReward" class="reward-confirm-btn">
             🎯 确认收益
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 修炼配置弹窗 -->
+    <div v-if="showSeqConfig" class="config-modal-overlay" @click.self="showSeqConfig = false">
+      <div class="config-modal">
+        <div class="config-modal-header">
+          <h3 class="config-modal-title">⚙️ 修炼配置</h3>
+          <button @click="showSeqConfig = false" class="config-modal-close">×</button>
+        </div>
+
+        <div class="config-modal-content">
+          <!-- 序列信息 -->
+          <div class="config-section">
+            <h4 class="config-section-title">📜 当前序列</h4>
+            <div class="sequence-info">
+              <div class="sequence-name">{{ getSequenceName(selectedSeq) }}</div>
+              <div class="sequence-level">当前等级：{{ getSequenceLevel(selectedSeq) }}重</div>
+              <div v-if="selectedSubProject" class="subproject-name">
+                子项目：{{ selectedSubProjectDetail?.name || selectedSubProject }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 目标数量配置 -->
+          <div class="config-section">
+            <h4 class="config-section-title">🎯 目标数量</h4>
+            <div class="target-config">
+              <label for="target-input">修炼目标：</label>
+              <input
+                id="target-input"
+                v-model.number="seqConfigTarget"
+                type="number"
+                min="1"
+                max="9999"
+                class="target-input"
+              />
+              <span class="target-unit">次</span>
+            </div>
+
+            <!-- 快捷选项 -->
+            <div class="target-quick-options">
+              <div class="quick-option-label">快捷设置：</div>
+              <div class="quick-option-buttons">
+                <button
+                  @click="seqConfigTarget = 1"
+                  class="quick-option-btn"
+                  :class="{ active: seqConfigTarget === 1 }"
+                >
+                  1次
+                </button>
+                <button
+                  @click="seqConfigTarget = 999999"
+                  class="quick-option-btn"
+                  :class="{ active: seqConfigTarget >= 999999 }"
+                >
+                  ♾️ 无限
+                </button>
+                <button
+                  @click="seqConfigTarget = 100"
+                  class="quick-option-btn"
+                  :class="{ active: seqConfigTarget === 100 }"
+                >
+                  100次
+                </button>
+                <button
+                  @click="seqConfigTarget = 500"
+                  class="quick-option-btn"
+                  :class="{ active: seqConfigTarget === 500 }"
+                >
+                  500次
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 产出物品预览 -->
+          <div class="config-section">
+            <h4 class="config-section-title">📦 预期产出</h4>
+            <div class="output-preview">
+              <div class="output-item">
+                <div class="output-icon">💫</div>
+                <div class="output-info">
+                  <div class="output-name">灵气</div>
+                  <div class="output-amount">{{ calculateExpectedGains() }} / 次</div>
+                </div>
+              </div>
+              <div v-if="selectedSequenceConfig?.drops" class="drops-preview">
+                <div
+                  v-for="drop in selectedSequenceConfig.drops"
+                  :key="drop.id"
+                  class="drop-item"
+                >
+                  <div class="drop-icon">🎲</div>
+                  <div class="drop-info">
+                    <div class="drop-name">{{ drop.name }}</div>
+                    <div class="drop-chance">{{ (drop.drop_chance * 100).toFixed(1) }}% 概率</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 消耗品选择（暂时留空，后续实现） -->
+          <div class="config-section">
+            <h4 class="config-section-title">🧪 增幅消耗品</h4>
+            <div class="consumables-placeholder">
+              <p>暂无可用消耗品</p>
+              <small class="placeholder-text">后续版本中将加入消耗品系统</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-modal-footer">
+          <button @click="showSeqConfig = false" class="config-btn config-btn-cancel">
+            取消
+          </button>
+          <button @click="confirmStartSeq" class="config-btn config-btn-confirm">
+            ⚡ 开始修炼
           </button>
         </div>
       </div>
@@ -1283,6 +1576,128 @@ function formatBonus(value) {
   opacity: 0.45;
   cursor: not-allowed;
   border-style: dashed;
+}
+
+/* 子项目头部 */
+.subproject-header {
+  flex: 1;
+  cursor: pointer;
+  padding: 14px;
+}
+
+.subproject-info {
+  flex: 1;
+}
+
+.subproject-actions {
+  margin: 0 14px 14px 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.subproject-start-btn {
+  background: linear-gradient(45deg, #4caf50, #45a049);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 20px;
+  color: white;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+  width: 100%;
+  animation: subprojectStartBtnPulse 2s ease-in-out infinite;
+}
+
+@keyframes subprojectStartBtnPulse {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(76, 175, 80, 0.5);
+    transform: scale(1.02);
+  }
+}
+
+.subproject-start-btn:hover {
+  background: linear-gradient(45deg, #45a049, #3d8b40);
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.5);
+}
+
+.subproject-start-btn:active {
+  transform: translateY(0) scale(0.98);
+  transition: all 0.1s ease;
+}
+
+.subproject-locked-indicator {
+  background: rgba(255, 152, 0, 0.2);
+  border: 1px solid rgba(255, 152, 0, 0.4);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: #ffcc80;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+  width: 100%;
+}
+
+.subproject-running-indicator {
+  background: linear-gradient(45deg, #ffc107, #ff9800);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: #333;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+  width: 100%;
+  animation: subprojectRunningPulse 2s ease-in-out infinite;
+}
+
+@keyframes subprojectRunningPulse {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(255, 193, 7, 0.6);
+  }
+}
+
+/* 序列状态指示 */
+.sequence-running-status {
+  background: linear-gradient(45deg, #ffc107, #ff9800);
+  border-radius: 6px;
+  padding: 4px 12px;
+  color: #333;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 8px;
+  animation: sequenceStatusPulse 2s ease-in-out infinite;
+}
+
+@keyframes sequenceStatusPulse {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(255, 193, 7, 0.6);
+  }
+}
+
+.sequence-other-status {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 4px 12px;
+  color: #b0b0b0;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 8px;
 }
 
 .subproject-name {
@@ -1578,10 +1993,9 @@ function formatBonus(value) {
 .progress-panel {
   background: rgba(255, 255, 255, 0.05);
   border-radius: 15px;
-  padding: 20px;
+  padding: 20px 25px;
   margin-bottom: 25px;
   border: 2px solid rgba(255, 193, 7, 0.3);
-  text-align: center;
   position: relative;
   overflow: hidden;
   animation: panelPulse 4s ease-in-out infinite;
@@ -1618,14 +2032,81 @@ function formatBonus(value) {
   }
 }
 
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  gap: 15px;
+}
+
+.progress-title-section {
+  flex: 1;
+  min-width: 0;
+}
+
 .progress-title {
   color: #ffc107;
-  margin: 0 0 15px 0;
+  margin: 0;
   font-size: 16px;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.progress-subproject {
+  color: #4caf50;
+  font-size: 14px;
+  font-weight: normal;
+}
+
+.progress-stop-btn {
+  background: linear-gradient(45deg, #f44336, #d32f2f);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 20px;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
+  flex-shrink: 0;
+}
+
+.progress-stop-btn:hover {
+  background: linear-gradient(45deg, #d32f2f, #c62828);
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.5);
+}
+
+.progress-stop-btn:active {
+  transform: translateY(0) scale(0.98);
+  transition: all 0.1s ease;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 193, 7, 0.2);
+}
+
+.progress-timing {
+  color: #ff9800;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.progress-bonus {
+  color: #4caf50;
+  font-size: 12px;
+  font-weight: bold;
 }
 
 .progress-level {
@@ -1836,6 +2317,7 @@ function formatBonus(value) {
   margin-top: 8px;
   font-weight: bold;
 }
+
 
 /* 格子背包样式 */
 .inventory-slots {
@@ -2730,5 +3212,322 @@ function formatBonus(value) {
   padding: 18px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 10px;
+}
+
+/* 修炼配置弹窗样式 */
+.config-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.config-modal {
+  background: linear-gradient(145deg, #1a1a2e, #16213e);
+  border-radius: 15px;
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-50px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.config-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 25px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.config-modal-title {
+  margin: 0;
+  font-size: 18px;
+  color: #4fc3f7;
+  font-weight: 600;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.config-modal-close {
+  background: none;
+  border: none;
+  color: #b0b0b0;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.config-modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ff5252;
+}
+
+.config-modal-content {
+  padding: 20px 25px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.config-section {
+  margin-bottom: 25px;
+}
+
+.config-section:last-child {
+  margin-bottom: 0;
+}
+
+.config-section-title {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #81c784;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sequence-info {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #4fc3f7;
+}
+
+.sequence-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #4fc3f7;
+  margin-bottom: 8px;
+}
+
+.sequence-level, .subproject-name {
+  font-size: 14px;
+  color: #b0b0b0;
+  margin-bottom: 4px;
+}
+
+.target-config {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 12px 15px;
+  border-radius: 8px;
+}
+
+.target-config label {
+  color: #e0e0e0;
+  font-size: 14px;
+  min-width: 80px;
+}
+
+.target-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.target-input:focus {
+  outline: none;
+  border-color: #4fc3f7;
+  box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.2);
+}
+
+.target-unit {
+  color: #b0b0b0;
+  font-size: 14px;
+}
+
+/* 快捷选项样式 */
+.target-quick-options {
+  margin-top: 15px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.quick-option-label {
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.quick-option-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quick-option-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: #e0e0e0;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 60px;
+}
+
+.quick-option-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+.quick-option-btn.active {
+  background: linear-gradient(45deg, #4caf50, #45a049);
+  border-color: #4caf50;
+  color: white;
+  box-shadow: 0 2px 6px rgba(76, 175, 80, 0.3);
+}
+
+.output-preview {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  border-radius: 8px;
+}
+
+.output-item, .drop-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.output-item:last-child, .drop-item:last-child {
+  border-bottom: none;
+}
+
+.output-icon, .drop-icon {
+  font-size: 20px;
+  width: 30px;
+  text-align: center;
+}
+
+.output-info, .drop-info {
+  flex: 1;
+}
+
+.output-name, .drop-name {
+  color: #e0e0e0;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.output-amount {
+  color: #4fc3f7;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.drop-chance {
+  color: #ffa726;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.consumables-placeholder {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 20px;
+  border-radius: 8px;
+  text-align: center;
+  color: #b0b0b0;
+}
+
+.consumables-placeholder p {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+}
+
+.placeholder-text {
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+}
+
+.config-modal-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  padding: 20px 25px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.config-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 80px;
+}
+
+.config-btn-cancel {
+  background: rgba(255, 255, 255, 0.1);
+  color: #b0b0b0;
+}
+
+.config-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #e0e0e0;
+}
+
+.config-btn-confirm {
+  background: linear-gradient(45deg, #4fc3f7, #29b6f6);
+  color: white;
+  font-weight: 600;
+  box-shadow: 0 4px 15px rgba(79, 195, 247, 0.3);
+}
+
+.config-btn-confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(79, 195, 247, 0.4);
+}
+
+.config-btn-confirm:active {
+  transform: translateY(0);
 }
 </style>

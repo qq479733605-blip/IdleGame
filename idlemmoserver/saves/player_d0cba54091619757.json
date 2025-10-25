@@ -1,0 +1,20 @@
+{
+  "PlayerID": "d0cba54091619757",
+  "SeqLevels": {
+    "alchemy": 159,
+    "meditation": 1,
+    "mining": 1
+  },
+  "Inventory": {
+    "alchemy_heaven_seed": 4,
+    "alchemy_secret": 4,
+    "elixir_life": 31,
+    "ore_iron": 3,
+    "pill_high": 24,
+    "pill_low": 150,
+    "pill_mid": 63
+  },
+  "Exp": 251161,
+  "Equipment": {},
+  "OfflineLimitHours": 10
+}

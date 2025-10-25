@@ -5,34 +5,99 @@ import { useRouter } from "vue-router";
 import { useUserStore } from "../store/user";
 
 const username = ref("");
+const password = ref("");
+const confirmPassword = ref("");
 const router = useRouter();
 const user = useUserStore();
 const isLoading = ref(false);
+const isRegisterMode = ref(false);
+const errorMessage = ref("");
 
 async function login() {
-  if (!username.value.trim()) {
-    alert("请输入道号！");
+  if (!username.value.trim() || !password.value.trim()) {
+    errorMessage.value = "请输入用户名和密码！";
     return;
   }
 
   isLoading.value = true;
+  errorMessage.value = "";
+
   try {
     const res = await axios.post("http://localhost:8080/login", {
       username: username.value,
-      password: "default", // 发送默认密码
+      password: password.value,
     });
-    user.setUser(username.value, res.data.token);
-    router.push("/main");
+
+    if (res.data.success) {
+      user.setUser(username.value, res.data.token);
+      router.push("/main");
+    } else {
+      errorMessage.value = res.data.error || "登录失败";
+    }
   } catch (e) {
-    alert("登录失败：" + e.message);
+    errorMessage.value = "登录失败：" + (e.response?.data?.error || e.message);
   } finally {
     isLoading.value = false;
   }
 }
 
+async function register() {
+  if (!username.value.trim() || !password.value.trim()) {
+    errorMessage.value = "请输入用户名和密码！";
+    return;
+  }
+
+  if (password.value.length < 3) {
+    errorMessage.value = "密码长度至少3位！";
+    return;
+  }
+
+  if (password.value !== confirmPassword.value) {
+    errorMessage.value = "两次输入的密码不一致！";
+    return;
+  }
+
+  isLoading.value = true;
+  errorMessage.value = "";
+
+  try {
+    const res = await axios.post("http://localhost:8080/register", {
+      username: username.value,
+      password: password.value,
+    });
+
+    if (res.data.success) {
+      // 注册成功，自动登录
+      alert("注册成功！正在自动登录...");
+      login();
+    } else {
+      errorMessage.value = res.data.error || "注册失败";
+    }
+  } catch (e) {
+    errorMessage.value = "注册失败：" + (e.response?.data?.error || e.message);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+function toggleMode() {
+  isRegisterMode.value = !isRegisterMode.value;
+  errorMessage.value = "";
+  password.value = "";
+  confirmPassword.value = "";
+}
+
+function handleSubmit() {
+  if (isRegisterMode.value) {
+    register();
+  } else {
+    login();
+  }
+}
+
 function handleKeyPress(event) {
   if (event.key === 'Enter') {
-    login();
+    handleSubmit();
   }
 }
 </script>
@@ -48,6 +113,30 @@ function handleKeyPress(event) {
       <div class="login-header">
         <h1 class="game-title">🏮 仙途凡尘</h1>
         <div class="game-subtitle">开启你的修仙之旅</div>
+
+        <!-- 模式切换 -->
+        <div class="mode-toggle">
+          <button
+            @click="toggleMode"
+            class="toggle-btn"
+            :disabled="isLoading"
+          >
+            <span v-if="!isRegisterMode">
+              <span class="toggle-icon">📝</span>
+              还没有账号？点击注册
+            </span>
+            <span v-else>
+              <span class="toggle-icon">🔙</span>
+              已有账号？点击登录
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 错误提示 -->
+      <div v-if="errorMessage" class="error-message">
+        <span class="error-icon">⚠️</span>
+        {{ errorMessage }}
       </div>
 
       <div class="login-form">
@@ -62,24 +151,55 @@ function handleKeyPress(event) {
           />
         </div>
 
+        <div class="form-group">
+          <label class="form-label">密码</label>
+          <input
+            v-model="password"
+            @keypress="handleKeyPress"
+            type="password"
+            class="form-input"
+            placeholder="请输入密码"
+            :disabled="isLoading"
+          />
+        </div>
+
+        <div v-if="isRegisterMode" class="form-group">
+          <label class="form-label">确认密码</label>
+          <input
+            v-model="confirmPassword"
+            @keypress="handleKeyPress"
+            type="password"
+            class="form-input"
+            placeholder="请再次输入密码"
+            :disabled="isLoading"
+          />
+        </div>
+
         <button
-          @click="login"
+          @click="handleSubmit"
           class="login-btn"
-          :disabled="isLoading || !username.trim()"
+          :disabled="isLoading || !username.trim() || !password.trim() || (isRegisterMode && !confirmPassword.trim())"
         >
           <span v-if="isLoading" class="loading-text">
             <span class="loading-spinner">⚡</span>
-            登录中...
+            {{ isRegisterMode ? '注册中...' : '登录中...' }}
           </span>
           <span v-else>
-            <span class="btn-icon">🚀</span>
-            开始修仙
+            <span class="btn-icon">{{ isRegisterMode ? '🌟' : '🚀' }}</span>
+            {{ isRegisterMode ? '创建账号' : '开始修仙' }}
           </span>
         </button>
 
         <div class="login-tips">
-          <p>🌟 随心输入道号即可开始修仙</p>
-          <p>📜 无需密码，一人一世界</p>
+          <p v-if="!isRegisterMode">
+            🔑 请输入你的道号和密码登录
+          </p>
+          <p v-else>
+            ✨ 创建新的修仙账号，开启专属旅程
+          </p>
+          <p>
+            {{ isRegisterMode ? '📝 密码长度至少3位' : '🌟 已有账号可直接登录' }}
+          </p>
         </div>
       </div>
 
@@ -165,7 +285,54 @@ function handleKeyPress(event) {
 .game-subtitle {
   color: #b0b0b0;
   font-size: 16px;
+  margin-bottom: 15px;
+}
+
+.mode-toggle {
   margin-bottom: 20px;
+}
+
+.toggle-btn {
+  background: none;
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 20px;
+  padding: 8px 16px;
+  color: #ffd700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: rgba(255, 215, 0, 0.05);
+}
+
+.toggle-btn:hover:not(:disabled) {
+  background: rgba(255, 215, 0, 0.1);
+  border-color: rgba(255, 215, 0, 0.5);
+}
+
+.toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-icon {
+  margin-right: 5px;
+}
+
+.error-message {
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.3);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 20px;
+  color: #ff3b30;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-icon {
+  font-size: 16px;
 }
 
 .login-form {

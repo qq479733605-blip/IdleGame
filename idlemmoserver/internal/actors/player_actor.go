@@ -240,12 +240,17 @@ func (p *PlayerActor) buildReconnectedPayload() map[string]any {
 		"equipment":          p.equipment.Export(),
 		"equipment_bonus":    p.equipment.TotalBonus(),
 		"active_sub_project": p.activeSubProject,
-		"equipment_catalog":  domain.GetEquipmentCatalogSummary(),
+		// 装备配置现在在前端本地处理，不需要传输
 	}
 }
 
 func (p *PlayerActor) handleLoadResult(m *MsgLoadResult) {
 	if m.Err != nil || m.Data == nil {
+		// 新玩家：为所有序列设置默认等级 1
+		p.seqLevels = make(map[string]int)
+		for seqID := range domain.Sequences {
+			p.seqLevels[seqID] = 1 // 默认等级为 1
+		}
 		p.sendToClient(map[string]any{"type": "S_NewPlayer"})
 		return
 	}
@@ -292,13 +297,7 @@ func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload
 	case "C_StartSeq":
 		p.handleStartSequence(ctx, m.Raw)
 
-	case "C_ListSeq":
-		seqs := domain.GetSequenceSummaries()
-		p.sendToClient(map[string]any{
-			"type":              "S_ListSeq",
-			"sequences":         seqs,
-			"equipment_catalog": domain.GetEquipmentCatalogSummary(),
-		})
+	// 配置现在在前端本地处理，不需要传输
 
 	case "C_StopSeq":
 		if p.currentSeq != nil {
@@ -312,8 +311,9 @@ func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload
 	case "C_ListBag":
 		p.sendToClient(map[string]any{"type": "S_BagInfo", "bag": p.inventory.List()})
 
+	// 装备配置现在在前端本地处理，但装备状态仍需要传输
 	case "C_ListEquipment":
-		p.sendEquipmentState(true)
+		p.sendEquipmentState(false) // 不包含装备目录，只包含状态
 
 	case "C_EquipItem":
 		p.handleEquipItem(ctx, m.Raw)
@@ -361,9 +361,14 @@ func (p *PlayerActor) handleClientPayload(ctx actor.Context, m *MsgClientPayload
 func (p *PlayerActor) handleStartSequence(ctx actor.Context, raw []byte) {
 	var req reqStart
 	_ = json.Unmarshal(raw, &req)
+
+	// 如果当前有运行的序列，自动停止它（支持无缝切换）
 	if p.currentSeq != nil {
-		p.sendToClient(map[string]any{"type": "S_Err", "msg": "sequence running"})
-		return
+		ctx.Stop(p.currentSeq)
+		p.currentSeq = nil
+		p.currentSeqID = ""
+		p.activeSubProject = ""
+		// 注意：这里不发送 S_SeqEnded，因为马上会发送 S_SeqStarted
 	}
 
 	cfg, exists := domain.GetSequenceConfig(req.SeqID)
