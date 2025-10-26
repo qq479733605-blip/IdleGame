@@ -243,8 +243,7 @@ PlayerActor (玩家状态管理)
 
 ### 已完成文档
 1. **[MILESTONE.md](./MILESTONE.md)** - 项目里程碑总结
-2. **[FUTURE_ROADMAP.md](./FUTURE_ROADMAP.md)** - 未来发展规划
-3. **[CLAUDE.md](./CLAUDE.md)** - 项目指导文档
+2. **[CLAUDE.md](./CLAUDE.md)** - 项目指导文档
 
 ---
 
