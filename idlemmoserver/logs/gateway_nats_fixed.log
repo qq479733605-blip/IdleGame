@@ -1,0 +1,7 @@
+# github.com/idle-server/gateway/internal/gate
+gateway\internal\gate\service.go:4:2: "bytes" imported and not used
+gateway\internal\gate\service.go:8:2: "io" imported and not used
+gateway\internal\gate\service.go:176:13: cannot use "" (untyped string constant) as *actor.PID value in struct literal
+gateway\internal\gate\service.go:180:64: undefined: common.MustMarshal
+gateway\internal\gate\service.go:224:13: cannot use "" (untyped string constant) as *actor.PID value in struct literal
+gateway\internal\gate\service.go:228:68: undefined: common.MustMarshal

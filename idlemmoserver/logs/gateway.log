@@ -1,0 +1,4 @@
+# github.com/idle-server/gateway/internal/gate
+gateway\internal\gate\service.go:95:56: not enough arguments in call to NewClientConnection
+	have (*websocket.Conn, *actor.PID, *nats.Conn)
+	want (*websocket.Conn, *actor.ActorSystem, *actor.PID, *nats.Conn)

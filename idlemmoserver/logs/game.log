@@ -1,0 +1,14 @@
+# github.com/idle-server/game/internal/game/domain
+game\internal\game\domain\sequence.go:15:2: SequenceConfig redeclared in this block
+	game\internal\game\domain\data.go:40:6: other declaration of SequenceConfig
+game\internal\game\domain\sequence.go:16:2: Item redeclared in this block
+	game\internal\game\domain\items.go:3:6: other declaration of Item
+game\internal\game\domain\sequence.go:18:2: RareEvent redeclared in this block
+	game\internal\game\domain\items.go:11:6: other declaration of RareEvent
+game\internal\game\domain\sequence.go:19:2: EquipmentBonus redeclared in this block
+	game\internal\game\domain\equipment.go:45:6: other declaration of EquipmentBonus
+game\internal\game\domain\sequence.go:24:10: cannot define new methods on non-local type Sequence
+game\internal\game\domain\sequence.go:35:26: cannot use s.SubProject.ExtraDrops (variable of type []common.Item) as []Item value in argument to append
+game\internal\game\domain\sequence.go:105:17: cannot use items (variable of type []Item) as []common.Item value in struct literal
+game\internal\game\domain\sequence.go:106:17: cannot use rare (variable of type *RareEvent) as *common.RareEvent value in struct literal
+game\internal\game\domain\sequence.go:114:10: cannot define new methods on non-local type Sequence

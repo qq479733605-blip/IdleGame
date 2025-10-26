@@ -6,7 +6,7 @@ let ws = null
 let heartbeatTimer = null
 
 export function connectWS(token) {
-    const url = `ws://localhost:8080/ws?token=${token}`
+    const url = `ws://localhost:8002/ws?token=${token}`  // 修改为Gateway服务端口
     ws = new WebSocket(url)
 
     ws.onopen = () => {

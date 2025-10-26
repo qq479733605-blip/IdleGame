@@ -1,0 +1,7 @@
+2025/10/27 07:32:20 Starting Gateway Service...
+2025/10/27 07:32:20 Connecting to NATS at nats://localhost:4222
+2025/10/27 07:32:20 Successfully connected to NATS
+[2m7:32AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0mYbr86BgLGBsdv4CzzRsxWL [2mid=[0mYbr86BgLGBsdv4CzzRsxWL
+2025/10/27 07:32:20 GatewayActor: unknown message type *actor.Started
+2025/10/27 07:32:20 Gateway service started successfully
+2025/10/27 07:32:20 Gateway service listening on port 8002

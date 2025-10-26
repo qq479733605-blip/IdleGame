@@ -1,5 +1,5 @@
 <script setup>
-import axios from "axios";
+import http from "../api/http";
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useUserStore } from "../store/user";
@@ -23,7 +23,7 @@ async function login() {
   errorMessage.value = "";
 
   try {
-    const res = await axios.post("http://localhost:8080/login", {
+    const res = await http.post("/login", {
       username: username.value,
       password: password.value,
     });
@@ -61,7 +61,7 @@ async function register() {
   errorMessage.value = "";
 
   try {
-    const res = await axios.post("http://localhost:8080/register", {
+    const res = await http.post("/register", {
       username: username.value,
       password: password.value,
     });

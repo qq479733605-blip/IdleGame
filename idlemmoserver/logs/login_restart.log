@@ -1,0 +1,20 @@
+2025/10/27 07:03:24 Starting Login Service...
+[2m7:03AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mid=[0mAsAcgZHx9WkoTspBELUNQC
+2025/10/27 07:03:24 LoginActor: unknown message type *actor.Started
+2025/10/27 07:03:24 NATS handlers registered for login service
+2025/10/27 07:03:24 Login service started successfully
+2025/10/27 07:03:24 Login service HTTP server listening on port 8001
+[2m7:16AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:17AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:18AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:18AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:登录成功 PlayerID:player_1015 Token:4567fb44fd10ce043d663f60b69f5c162de72b78c4a5670d46d825a8d44b7f83}" [2msender=[0m<nil>
+[2m7:19AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:22AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:登录成功 PlayerID:player_1015 Token:64733d41c2ac740d6544f183db15d12a442bfcc331fd9bb4258594385f6bdc85}" [2msender=[0m<nil>
+[2m7:23AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:26AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:登录成功 PlayerID:player_1015 Token:ae5d749e3becae595f1428fef31fc5d900c911130066e0a6f0095a6249696a7f}" [2msender=[0m<nil>
+[2m7:26AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:注册成功 PlayerID:9bb6c319a3638457}" [2msender=[0m<nil>
+[2m7:27AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:28AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:29AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>
+[2m7:30AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:登录成功 PlayerID:player_1015 Token:8511aad171a853c6d537268d571df76fbcbc820e97a01588fcd25427c1631e0e}" [2msender=[0m<nil>
+[2m7:30AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0mAsAcgZHx9WkoTspBELUNQC [2mpid=[0m<nil> [2mmessage=[0m"&{Success:false Message:用户不存在 PlayerID: Token:}" [2msender=[0m<nil>

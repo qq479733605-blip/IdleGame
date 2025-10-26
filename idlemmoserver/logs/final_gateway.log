@@ -1,0 +1,2 @@
+# github.com/idle-server/gateway/internal/gate
+gateway\internal\gate\connection.go:147:9: msg declared and not used

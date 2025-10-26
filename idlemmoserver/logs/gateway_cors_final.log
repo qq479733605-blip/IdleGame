@@ -1,0 +1,6 @@
+2025/10/27 06:57:24 Starting Gateway Service...
+[2m6:57AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0mTVNQ27wyVBNHXbBnh794kd [2mid=[0mTVNQ27wyVBNHXbBnh794kd
+2025/10/27 06:57:24 Gateway service started successfully
+2025/10/27 06:57:24 GatewayActor: unknown message type *actor.Started
+2025/10/27 06:57:24 Gateway service listening on port 8002
+exit status 0xffffffff

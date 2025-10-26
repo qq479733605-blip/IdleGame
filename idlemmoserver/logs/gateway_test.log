@@ -1,0 +1,7 @@
+2025/10/27 06:42:05 Starting Gateway Service...
+[2m6:42AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0mXmsExxuiP6mZ6c3uAMXEjw [2mid=[0mXmsExxuiP6mZ6c3uAMXEjw
+2025/10/27 06:42:05 GatewayActor: unknown message type *actor.Started
+2025/10/27 06:42:05 Gateway service started successfully
+2025/10/27 06:42:05 Gateway service listening on port 8002
+2025/10/27 06:42:05 HTTP server error: listen tcp :8002: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
+exit status 1

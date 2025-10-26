@@ -1,0 +1,7 @@
+2025/10/27 06:53:21 Starting Login Service...
+[2m6:53AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0mbxMuCVBJ6Re7kxDx7CkMRL [2mid=[0mbxMuCVBJ6Re7kxDx7CkMRL
+2025/10/27 06:53:21 NATS handlers registered for login service
+2025/10/27 06:53:21 LoginActor: unknown message type *actor.Started
+2025/10/27 06:53:21 Login service started successfully
+2025/10/27 06:53:21 Login service HTTP server listening on port 8001
+exit status 0xffffffff

@@ -1,0 +1,3 @@
+# github.com/idle-server/persist/internal/persist
+persist\internal\persist\persist_actor.go:121:2: declared and not used: saveSub
+persist\internal\persist\persist_actor.go:130:2: declared and not used: loadSub

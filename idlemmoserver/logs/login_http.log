@@ -1,0 +1,10 @@
+2025/10/27 06:50:51 Starting Login Service...
+[2m6:50AM[0m [92mINF[0m actor system started [2mlib=[0mProto.Actor [2msystem=[0m8f9SuKkai8JVCZTWKjGLfn [2mid=[0m8f9SuKkai8JVCZTWKjGLfn
+2025/10/27 06:50:51 LoginActor: unknown message type *actor.Started
+2025/10/27 06:50:51 NATS handlers registered for login service
+2025/10/27 06:50:51 Login service started successfully
+2025/10/27 06:50:51 Login service HTTP server listening on port 8001
+[2m6:51AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0m8f9SuKkai8JVCZTWKjGLfn [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:注册成功 PlayerID:a68f0215002a3f1a}" [2msender=[0m<nil>
+[2m6:51AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0m8f9SuKkai8JVCZTWKjGLfn [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:登录成功 PlayerID:a68f0215002a3f1a Token:23807ed88fbf887ad4ff4a670e00482a277d38d1a6491c1f5abb80349adbaa98}" [2msender=[0m<nil>
+[2m6:51AM[0m [92mINF[0m [DeadLetter] [2mlib=[0mProto.Actor [2msystem=[0m8f9SuKkai8JVCZTWKjGLfn [2mpid=[0m<nil> [2mmessage=[0m"&{Success:true Message:注册成功 PlayerID:cbb580385703ae59}" [2msender=[0m<nil>
+exit status 0xffffffff
