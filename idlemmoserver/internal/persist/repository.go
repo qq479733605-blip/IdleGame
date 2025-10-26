@@ -1,17 +1,8 @@
 package persist
 
-import "idlemmoserver/internal/domain"
+import "idlemmoserver/internal/common"
 
-type PlayerData struct {
-	PlayerID          string
-	SeqLevels         map[string]int
-	Inventory         map[string]int64
-	Exp               int64
-	Equipment         map[string]domain.EquipmentState
-	OfflineLimitHours int64
-}
-
-type Repository interface {
-	SavePlayer(data *PlayerData) error
-	LoadPlayer(playerID string) (*PlayerData, error)
+type PlayerRepository interface {
+	SavePlayer(data *common.PlayerSnapshot) error
+	LoadPlayer(playerID string) (*common.PlayerSnapshot, error)
 }
