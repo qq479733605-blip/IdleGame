@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"idlemmoserver/internal/common"
 )
 
 type JSONRepo struct {
@@ -22,7 +24,7 @@ func (r *JSONRepo) filePath(playerID string) string {
 	return filepath.Join(r.path, fmt.Sprintf("player_%s.json", playerID))
 }
 
-func (r *JSONRepo) SavePlayer(data *PlayerData) error {
+func (r *JSONRepo) SavePlayer(data *common.PlayerSnapshot) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -34,7 +36,7 @@ func (r *JSONRepo) SavePlayer(data *PlayerData) error {
 	return os.WriteFile(f, b, 0644)
 }
 
-func (r *JSONRepo) LoadPlayer(playerID string) (*PlayerData, error) {
+func (r *JSONRepo) LoadPlayer(playerID string) (*common.PlayerSnapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -43,7 +45,7 @@ func (r *JSONRepo) LoadPlayer(playerID string) (*PlayerData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load failed: %w", err)
 	}
-	var d PlayerData
+	var d common.PlayerSnapshot
 	if err := json.Unmarshal(b, &d); err != nil {
 		return nil, fmt.Errorf("parse json: %w", err)
 	}

@@ -1,21 +1,11 @@
-package domain
+package sequence
 
 import (
 	"math/rand"
 	"time"
-)
 
-type SequenceSubProject struct {
-	ID               string  `json:"id"`
-	Name             string  `json:"name"`
-	UnlockLevel      int     `json:"unlock_level"`
-	Description      string  `json:"description"`
-	GainMultiplier   float64 `json:"gain_multiplier"`
-	RareChanceBonus  float64 `json:"rare_chance_bonus"`
-	ExpMultiplier    float64 `json:"exp_multiplier"`
-	IntervalModifier float64 `json:"interval_modifier"`
-	ExtraDrops       []Item  `json:"extra_drops"`
-}
+	"idlemmoserver/internal/common"
+)
 
 type Sequence struct {
 	ID         string
@@ -23,22 +13,29 @@ type Sequence struct {
 	Exp        int64
 	StartTime  time.Time
 	LastTick   time.Time
-	SubProject *SequenceSubProject
+	SubProject *SubProject
 }
 
 type TickResult struct {
 	Gains        int64
-	Items        []Item
-	RareEvt      *RareEvent
-	Level        int   // 当前等级（Tick 后）
-	CurExp       int64 // 当前经验（Tick 后）
-	Leveled      bool  // 是否在本次升级
+	Items        []common.ItemDrop
+	RareEvt      *common.RareEvent
+	Level        int
+	CurExp       int64
+	Leveled      bool
 	SubProjectID string
 }
 
-func (s *Sequence) Tick(cfg *SequenceConfig, bonus EquipmentBonus) TickResult {
-	// 复制掉落配置，避免修改原数据
-	drops := make([]Item, len(cfg.Drops))
+func NewSequence(seqID string, level int, sub *SubProject) *Sequence {
+	s := &Sequence{ID: seqID, Level: level, StartTime: time.Now(), LastTick: time.Now()}
+	if sub != nil {
+		s.SubProject = sub
+	}
+	return s
+}
+
+func (s *Sequence) Tick(cfg *Config, bonus common.EquipmentBonus) TickResult {
+	drops := make([]common.ItemDrop, len(cfg.Drops))
 	copy(drops, cfg.Drops)
 
 	gainMultiplier := 1.0 + bonus.GainMultiplier
@@ -64,43 +61,38 @@ func (s *Sequence) Tick(cfg *SequenceConfig, bonus EquipmentBonus) TickResult {
 		rareChance = 1
 	}
 
-	// 基础收益 + 成长
 	gains := cfg.BaseGain + int64(float64(s.Level)*cfg.GrowthFactor)
 	gains = int64(float64(gains) * gainMultiplier)
 	if gains < 0 {
 		gains = 0
 	}
 
-	// 掉落
-	items := []Item{}
+	items := []common.ItemDrop{}
 	for _, it := range drops {
 		if rand.Float64() < it.DropChance {
 			items = append(items, it)
 		}
 	}
 
-	// 装备掉落
 	for _, equip := range cfg.EquipmentDrops {
 		if s.Level >= equip.MinLevel && rand.Float64() < equip.DropChance {
-			items = append(items, Item{
+			items = append(items, common.ItemDrop{
 				ID:          equip.ID,
 				Name:        equip.Name,
 				DropChance:  equip.DropChance,
-				Value:       50,   // 装备基础价值
-				IsEquipment: true, // 标记为装备
+				Value:       50,
+				IsEquipment: true,
 			})
 		}
 	}
 
-	// 奇遇
-	var rare *RareEvent
+	var rare *common.RareEvent
 	if rand.Float64() < rareChance && len(cfg.RareEvents) > 0 {
 		r := cfg.RareEvents[rand.Intn(len(cfg.RareEvents))]
 		rare = &r
 		gains = int64(float64(gains) * rare.MultGain)
 	}
 
-	// 成长：经验与升级（表驱动）
 	expGain := int64(float64(gains) * expRate)
 	s.Exp += expGain
 	leveled := false
@@ -126,17 +118,27 @@ func (s *Sequence) Tick(cfg *SequenceConfig, bonus EquipmentBonus) TickResult {
 	}
 }
 
-func (s *Sequence) SetSubProject(sp *SequenceSubProject) {
-	s.SubProject = sp
-}
-
-func (cfg *SequenceConfig) EffectiveInterval(sp *SequenceSubProject) time.Duration {
+func (s *Sequence) EffectiveInterval(cfg *Config) time.Duration {
 	base := float64(cfg.TickInterval)
 	if base <= 0 {
 		base = 1
 	}
-	if sp != nil && sp.IntervalModifier > 0 {
-		base = base * sp.IntervalModifier
+	if s.SubProject != nil && s.SubProject.IntervalModifier > 0 {
+		base = base * s.SubProject.IntervalModifier
+	}
+	if base < 0.5 {
+		base = 0.5
+	}
+	return time.Duration(base * float64(time.Second))
+}
+
+func EffectiveInterval(cfg *Config, sub *SubProject) time.Duration {
+	base := float64(cfg.TickInterval)
+	if base <= 0 {
+		base = 1
+	}
+	if sub != nil && sub.IntervalModifier > 0 {
+		base = base * sub.IntervalModifier
 	}
 	if base < 0.5 {
 		base = 0.5

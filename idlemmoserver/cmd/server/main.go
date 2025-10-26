@@ -1,13 +1,15 @@
 package main
 
 import (
-	"idlemmoserver/internal/actors"
-	"idlemmoserver/internal/domain"
+	"log"
+	"time"
+
 	"idlemmoserver/internal/gateway"
 	"idlemmoserver/internal/logx"
 	"idlemmoserver/internal/persist"
-	"log"
-	"time"
+	"idlemmoserver/internal/player"
+	"idlemmoserver/internal/scheduler"
+	"idlemmoserver/internal/sequence"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/gin-contrib/cors"
@@ -15,49 +17,40 @@ import (
 )
 
 func main() {
-
 	logx.Init()
 
-	// 1) 加载表驱动配置
-	if err := domain.LoadConfig("internal/domain/config_full.json"); err != nil {
+	if err := sequence.LoadConfig("internal/sequence/config_full.json"); err != nil {
 		log.Fatal(err)
 	}
-	if err := domain.LoadEquipmentConfig("internal/domain/equipment_config.json"); err != nil {
+	if err := player.LoadEquipmentConfig("internal/player/equipment_config.json"); err != nil {
 		log.Fatal(err)
 	}
 
-	// 2) ActorSystem
 	sys := actor.NewActorSystem()
 	root := sys.Root
 
-	// 3) 持久化：JSONRepo + PersistActor
 	repo := persist.NewJSONRepo("saves")
 	persistPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewPersistActor(repo)
+		return persist.NewActor(repo)
 	}))
 
-	// 4) 用户仓库 + AuthActor
 	userRepo := persist.NewJSONUserRepo("users")
 	authPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewAuthActor(userRepo)
+		return gateway.NewAuthActor(userRepo)
 	}))
 
 	schedulerPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewSchedulerActor()
+		return scheduler.NewActor(200 * time.Millisecond)
 	}))
 
-	// 5) 设置全局persistPID、schedulerPID
-	gateway.SetPersistPID(persistPID)
-	gateway.SetSchedulerPID(schedulerPID)
+	services := &player.Services{PersistPID: persistPID, SchedulerPID: schedulerPID}
 
-	// 6) GatewayActor（传入 persistPID，便于 PlayerActor 保存/加载）
-	_ = root.Spawn(actor.PropsFromProducer(func() actor.Actor {
-		return actors.NewGatewayActor(root, persistPID, schedulerPID)
+	gatewayPID := root.Spawn(actor.PropsFromProducer(func() actor.Actor {
+		return gateway.NewGatewayActor(root, services)
 	}))
+	services.GatewayPID = gatewayPID
 
-	// 7) HTTP/WS 路由
 	r := gin.Default()
-	// ✅ 加上 CORS 中间件
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -66,9 +59,10 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	gateway.InitRoutes(r, root, authPID)
 
-	log.Println("✅ loaded sequences config, server started :8080")
+	gateway.InitRoutes(r, root, authPID, gatewayPID)
+
+	log.Println("server started on :8080")
 	if err := r.Run(":8080"); err != nil {
 		log.Fatal(err)
 	}
