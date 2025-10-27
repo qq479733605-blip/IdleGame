@@ -44,8 +44,13 @@ func (s *Service) Start(ctx context.Context) error {
 	// 创建Actor系统
 	s.system = actor.NewActorSystem()
 
-	// 创建并启动网关Actor
-	props := actor.PropsFromProducer(NewGatewayActor(s.connections))
+	// 创建并启动网关Actor，传入NATS连接
+	props := actor.PropsFromProducer(func() actor.Actor {
+		return &GatewayActor{
+			connections: s.connections,
+			nc:          s.nc,
+		}
+	})
 	s.gatewayPID = s.system.Root.Spawn(props)
 
 	// 注册NATS处理器
@@ -83,6 +88,9 @@ func (s *Service) GetHTTPHandler() http.Handler {
 	// 健康检查端点
 	mux.HandleFunc("/health", s.handleHealth)
 
+	// 调试端点
+	mux.HandleFunc("/debug", s.handleDebug)
+
 	// 认证端点 - 转发到Login服务
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/register", s.handleRegister)
@@ -93,6 +101,14 @@ func (s *Service) GetHTTPHandler() http.Handler {
 
 // handleWebSocket 处理WebSocket连接
 func (s *Service) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("=== WebSocket Connection Request ===")
+	log.Printf("URL: %s", r.URL.String())
+	log.Printf("Headers:")
+	for name, values := range r.Header {
+		log.Printf("  %s: %v", name, values)
+	}
+	log.Printf("Query params: %s", r.URL.RawQuery)
+
 	// 升级到WebSocket连接
 	conn, err := s.upgrader.Upgrade(w, r)
 	if err != nil {
@@ -100,14 +116,21 @@ func (s *Service) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("WebSocket connection established from: %s", conn.RemoteAddr().String())
+
 	// 创建客户端连接
 	clientConn := NewClientConnection(conn, s.system, s.gatewayPID, s.nc)
+	log.Printf("Created ClientConnection for %s", conn.RemoteAddr().String())
 
 	// 启动连接处理
+	log.Printf("Starting ClientConnection...")
 	go clientConn.Start()
+	log.Printf("ClientConnection started in goroutine")
 
 	// 添加到连接管理器
 	s.connections[conn.RemoteAddr().String()] = clientConn
+	log.Printf("WebSocket connection added to manager")
+	log.Printf("===============================")
 }
 
 // handleHealth 处理健康检查
@@ -152,9 +175,18 @@ func (s *Service) handleBroadcast(msg *nats.Msg) {
 	}
 }
 
-// handleLogin 处理登录请求 - 临时返回模拟响应用于CORS测试
+// handleLogin 处理登录请求 - 通过NATS调用Auth服务
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
+	log.Printf("=== LOGIN REQUEST ===")
+	log.Printf("Method: %s", r.Method)
+	log.Printf("URL: %s", r.URL.String())
+	log.Printf("Headers:")
+	for name, values := range r.Header {
+		log.Printf("  %s: %v", name, values)
+	}
+
 	if r.Method != http.MethodPost {
+		log.Printf("Method not allowed: %s", r.Method)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -165,23 +197,54 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Failed to decode login request: %v", err)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	// 临时模拟响应用于CORS测试
-	result := map[string]interface{}{
-		"success":  true,
-		"message":  "CORS测试登录成功（模拟响应）",
-		"playerID": "test_player_123",
-		"token":    "test_token_12345",
+	log.Printf("Login request for user: %s", req.Username)
+	log.Printf("===================")
+
+	// 创建认证请求消息
+	authMsg := &common.MsgAuthenticateUser{
+		Username: req.Username,
+		Password: req.Password,
+		ReplyTo:  nil, // 将使用Request模式
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// 通过NATS发送请求到Auth服务
+	authData, err := common.Marshal(authMsg)
+	if err != nil {
+		http.Error(w, "Failed to marshal request", http.StatusInternalServerError)
+		return
+	}
+
+	response, err := s.nc.Request(common.AuthLoginSubject, authData, 5*time.Second)
+	if err != nil {
+		log.Printf("Failed to call auth service: %v", err)
+		http.Error(w, "Auth service unavailable", http.StatusBadGateway)
+		return
+	}
+
+	// 解析响应
+	var result common.MsgAuthenticateUserResult
+	if err := common.Unmarshal(response.Data, &result); err != nil {
+		log.Printf("Failed to parse auth response: %v", err)
+		http.Error(w, "Failed to parse response", http.StatusInternalServerError)
+		return
+	}
+
+	// 返回结果
+	w.Header().Set("Content-Type", "application/json")
+	if result.Success {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusUnauthorized)
+	}
 	json.NewEncoder(w).Encode(result)
 }
 
-// handleRegister 处理注册请求 - 通过NATS调用Login服务
+// handleRegister 处理注册请求 - 通过NATS调用Auth服务
 func (s *Service) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -211,20 +274,23 @@ func (s *Service) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to marshal request", http.StatusInternalServerError)
 		return
 	}
-	response, err := s.nc.Request(common.LoginRegisterSubject, regData, 5*time.Second)
+	response, err := s.nc.Request(common.AuthRegisterSubject, regData, 5*time.Second)
 	if err != nil {
-		http.Error(w, "Login service unavailable", http.StatusBadGateway)
+		log.Printf("Failed to call auth service: %v", err)
+		http.Error(w, "Auth service unavailable", http.StatusBadGateway)
 		return
 	}
 
 	// 解析响应
 	var result common.MsgRegisterUserResult
 	if err := common.Unmarshal(response.Data, &result); err != nil {
+		log.Printf("Failed to parse register response: %v", err)
 		http.Error(w, "Failed to parse response", http.StatusInternalServerError)
 		return
 	}
 
-	// 返回结果 - 不设置任何头部，让CORS中间件处理
+	// 返回结果
+	w.Header().Set("Content-Type", "application/json")
 	if result.Success {
 		w.WriteHeader(http.StatusCreated)
 	} else {

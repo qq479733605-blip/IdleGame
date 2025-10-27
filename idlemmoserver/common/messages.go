@@ -91,6 +91,34 @@ type MsgLoadResult struct {
 	Err  error
 }
 
+// MsgSaveUser 保存用户数据
+type MsgSaveUser struct {
+	UserData *UserData
+}
+
+// MsgLoadUser 加载用户数据
+type MsgLoadUser struct {
+	Username string
+	ReplyTo  *actor.PID
+}
+
+// MsgLoadUserResult 加载用户结果
+type MsgLoadUserResult struct {
+	UserData *UserData
+	Err      error
+}
+
+// MsgUserExists 检查用户是否存在
+type MsgUserExists struct {
+	Username string
+	ReplyTo  *actor.PID
+}
+
+// MsgUserExistsResult 用户存在结果
+type MsgUserExistsResult struct {
+	Exists bool
+}
+
 // ============ 认证相关消息 ============
 
 // MsgRegisterUser 注册用户
@@ -102,24 +130,24 @@ type MsgRegisterUser struct {
 
 // MsgRegisterUserResult 注册用户结果
 type MsgRegisterUserResult struct {
-	Success  bool
-	Message  string
-	PlayerID string
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	PlayerID string `json:"playerId"`
 }
 
 // MsgAuthenticateUser 认证用户
 type MsgAuthenticateUser struct {
-	Username string
-	Password string
-	ReplyTo  *actor.PID
+	Username string     `json:"username"`
+	Password string     `json:"password"`
+	ReplyTo  *actor.PID `json:"-"`
 }
 
 // MsgAuthenticateUserResult 认证用户结果
 type MsgAuthenticateUserResult struct {
-	Success  bool
-	Message  string
-	PlayerID string
-	Token    string
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	PlayerID string `json:"playerId"`
+	Token    string `json:"token"`
 }
 
 // MsgGetUserByPlayerID 根据PlayerID获取用户
@@ -132,6 +160,32 @@ type MsgGetUserByPlayerID struct {
 type MsgGetUserByPlayerIDResult struct {
 	User   *UserData
 	Exists bool
+}
+
+// MsgValidateToken 验证Token
+type MsgValidateToken struct {
+	Token   string
+	ReplyTo *actor.PID
+}
+
+// MsgValidateTokenResult Token验证结果
+type MsgValidateTokenResult struct {
+	Valid    bool
+	PlayerID string
+	Message  string
+}
+
+// MsgGetPlayerByToken 根据Token获取PlayerID
+type MsgGetPlayerByToken struct {
+	Token   string
+	ReplyTo *actor.PID
+}
+
+// MsgGetPlayerByTokenResult 获取PlayerID结果
+type MsgGetPlayerByTokenResult struct {
+	Success  bool
+	PlayerID string
+	Message  string
 }
 
 // ============ Actor注册相关消息 ============
@@ -216,6 +270,11 @@ type S_Error struct {
 	Type    string `json:"type"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// S_Pong 心跳响应
+type S_Pong struct {
+	Type string `json:"type"`
 }
 
 // S_PlayerData 玩家数据

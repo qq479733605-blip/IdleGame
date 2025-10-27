@@ -2,10 +2,20 @@ package common
 
 // NATS主题定义
 const (
-	// ============ 登录服务相关 ============
-	LoginAuthSubject     = "login.auth"
-	LoginRegisterSubject = "login.register"
-	LoginGetUserSubject  = "login.get_user"
+	// ============ 认证服务相关 ============
+	AuthPasswordSubject      = "auth.password"
+	AuthRegisterSubject      = "auth.register"
+	AuthGetUserSubject       = "auth.get_user"
+	AuthValidateTokenSubject = "auth.validate_token"
+
+	// ============ OAuth服务相关 ============
+	OAuthAuthURLSubject  = "oauth.auth_url"
+	OAuthCallbackSubject = "oauth.callback"
+	OAuthUserInfoSubject = "oauth.user_info"
+
+	// ============ 统一对外认证主题 ============
+	AuthLoginSubject     = "auth.login"      // Gateway调用
+	AuthGetPlayerSubject = "auth.get_player" // 根据token获取playerID
 
 	// ============ 游戏服务相关 ============
 	GamePlayerRegisterSubject   = "game.player.register"
@@ -21,6 +31,11 @@ const (
 	PersistSaveSubject       = "persist.save"
 	PersistLoadSubject       = "persist.load"
 	PersistLoadResultSubject = "persist.load_result"
+
+	// ============ 用户数据持久化相关 ============
+	PersistSaveUserSubject   = "persist.save_user"
+	PersistLoadUserSubject   = "persist.load_user"
+	PersistUserExistsSubject = "persist.user_exists"
 
 	// ============ 网关服务相关 ============
 	GatewayBroadcastSubject = "gateway.broadcast"

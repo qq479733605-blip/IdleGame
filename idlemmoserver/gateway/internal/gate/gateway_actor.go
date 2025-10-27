@@ -44,6 +44,8 @@ func (a *GatewayActor) Receive(ctx actor.Context) {
 
 // handleFromWS 处理来自WebSocket的消息
 func (a *GatewayActor) handleFromWS(ctx actor.Context, msg *common.MsgFromWS) {
+	log.Printf("handleFromWS: Received WebSocket message: %s", string(msg.Data))
+
 	// 解析客户端消息
 	var clientMsg map[string]interface{}
 	if err := json.Unmarshal(msg.Data, &clientMsg); err != nil {
@@ -64,6 +66,8 @@ func (a *GatewayActor) handleFromWS(ctx actor.Context, msg *common.MsgFromWS) {
 		a.handleLoginAuth(ctx, msg)
 	case "C_Login":
 		a.handleTokenLogin(ctx, msg)
+	case "C_Ping":
+		a.handlePing(ctx, msg)
 	default:
 		// 其他游戏消息，转发给游戏服务
 		a.forwardToGameService(ctx, msg)
@@ -78,7 +82,7 @@ func (a *GatewayActor) handleLoginAuth(ctx actor.Context, msg *common.MsgFromWS)
 		return
 	}
 
-	// 发送NATS请求到登录服务
+	// 发送NATS请求到Auth服务
 	authMsg := common.MsgAuthenticateUser{
 		Username: loginReq.Username,
 		Password: loginReq.Password,
@@ -86,7 +90,7 @@ func (a *GatewayActor) handleLoginAuth(ctx actor.Context, msg *common.MsgFromWS)
 
 	// 发送NATS请求
 	data, _ := json.Marshal(&authMsg)
-	resp, err := a.nc.Request(common.LoginAuthSubject, data, 5*time.Second)
+	resp, err := a.nc.Request(common.AuthLoginSubject, data, 5*time.Second)
 	if err != nil {
 		log.Printf("Failed to send auth request: %v", err)
 		return
@@ -98,9 +102,16 @@ func (a *GatewayActor) handleLoginAuth(ctx actor.Context, msg *common.MsgFromWS)
 		return
 	}
 
+	// 如果认证成功，更新连接的PlayerID
+	if result.Success {
+		if conn := a.getConnectionByWebSocket(msg.Conn); conn != nil {
+			conn.SetPlayerID(result.PlayerID)
+		}
+	}
+
 	// 发送结果给客户端
 	response := common.S_LoginOK{
-		Type:     common.ServerMsgTypeLoginOK,
+		Type:     "S_LoginOK",
 		Token:    result.Token,
 		PlayerID: result.PlayerID,
 	}
@@ -117,23 +128,78 @@ func (a *GatewayActor) handleTokenLogin(ctx actor.Context, msg *common.MsgFromWS
 		return
 	}
 
-	// TODO: 实现Token验证逻辑
-	// 临时：直接成功
-	response := common.S_LoginOK{
-		Type:     common.ServerMsgTypeLoginOK,
-		Token:    loginReq.Token,
-		PlayerID: "temp_player_id", // 从Token解析
+	// 发送Token验证请求到Auth服务
+	validateMsg := common.MsgValidateToken{
+		Token: loginReq.Token,
 	}
 
-	data, _ := json.Marshal(response)
-	msg.Conn.WriteMessage(websocket.TextMessage, data)
+	// 发送NATS请求
+	data, _ := json.Marshal(&validateMsg)
+	resp, err := a.nc.Request(common.AuthValidateTokenSubject, data, 5*time.Second)
+	if err != nil {
+		log.Printf("Failed to send token validation request: %v", err)
+		return
+	}
+
+	var result common.MsgValidateTokenResult
+	if err := common.Unmarshal(resp.Data, &result); err != nil {
+		log.Printf("Failed to unmarshal token validation response: %v", err)
+		return
+	}
+
+	// 如果Token有效，更新连接的PlayerID
+	if result.Valid {
+		if conn := a.getConnectionByWebSocket(msg.Conn); conn != nil {
+			conn.SetPlayerID(result.PlayerID)
+		}
+	}
+
+	// 发送结果给客户端
+	if result.Valid {
+		response := common.S_LoginOK{
+			Type:     "S_LoginOK",
+			Token:    loginReq.Token,
+			PlayerID: result.PlayerID,
+		}
+		data, _ = json.Marshal(response)
+		msg.Conn.WriteMessage(websocket.TextMessage, data)
+	} else {
+		// Token无效，发送错误消息
+		response := common.S_Error{
+			Type:    "S_Error",
+			Code:    401,
+			Message: "Invalid token",
+		}
+		data, _ = json.Marshal(response)
+		msg.Conn.WriteMessage(websocket.TextMessage, data)
+	}
+}
+
+// handlePing 处理心跳消息
+func (a *GatewayActor) handlePing(ctx actor.Context, msg *common.MsgFromWS) {
+	log.Printf("Received ping from client, sending pong response")
+
+	// 发送pong响应给客户端
+	response := common.S_Pong{
+		Type: "S_Pong",
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Failed to marshal pong response: %v", err)
+		return
+	}
+
+	if err := msg.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("Failed to send pong response: %v", err)
+	}
 }
 
 // forwardToGameService 转发消息到游戏服务
 func (a *GatewayActor) forwardToGameService(ctx actor.Context, msg *common.MsgFromWS) {
 	// 创建客户端载荷消息
 	payload := &common.MsgClientPayload{
-		PlayerID: getPlayerIDFromConnection(msg.Conn), // 需要从连接中获取PlayerID
+		PlayerID: a.getPlayerIDFromConnection(msg.Conn), // 需要从连接中获取PlayerID
 		Conn:     msg.Conn,
 		Raw:      msg.Data,
 	}
@@ -147,7 +213,7 @@ func (a *GatewayActor) handleWSClosed(ctx actor.Context, msg *common.MsgWSClosed
 	delete(a.connections, msg.Conn.RemoteAddr().String())
 
 	// 通知游戏服务玩家离线
-	playerID := getPlayerIDFromConnection(msg.Conn)
+	playerID := a.getPlayerIDFromConnection(msg.Conn)
 	if playerID != "" {
 		offlineMsg := common.MsgPlayerOffline{}
 		data, _ := json.Marshal(&offlineMsg)
@@ -204,9 +270,22 @@ func (a *GatewayActor) handleToClient(ctx actor.Context, msg *common.MsgToClient
 	}
 }
 
-// getPlayerIDFromConnection 从连接获取PlayerID（需要实现连接状态管理）
-func getPlayerIDFromConnection(conn *websocket.Conn) string {
-	// TODO: 实现从连接获取PlayerID的逻辑
-	// 可以使用连接的额外属性或全局映射
+// getConnectionByWebSocket 根据WebSocket连接获取ClientConnection
+func (a *GatewayActor) getConnectionByWebSocket(wsConn *websocket.Conn) *ClientConnection {
+	for _, conn := range a.connections {
+		if conn.conn == wsConn {
+			return conn
+		}
+	}
+	return nil
+}
+
+// getPlayerIDFromConnection 从连接获取PlayerID
+func (a *GatewayActor) getPlayerIDFromConnection(conn *websocket.Conn) string {
+	for _, clientConn := range a.connections {
+		if clientConn.conn == conn {
+			return clientConn.GetPlayerID()
+		}
+	}
 	return ""
 }

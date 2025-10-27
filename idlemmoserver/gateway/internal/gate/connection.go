@@ -34,24 +34,32 @@ func NewClientConnection(conn *websocket.Conn, system *actor.ActorSystem, gatewa
 
 // Start 启动连接处理
 func (c *ClientConnection) Start() {
-	// 设置读取超时
-	c.conn.SetReadDeadline(time.Now().Add(common.WSPongWait))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(common.WSPongWait))
-		return nil
-	})
+	log.Printf("ClientConnection.Start() called for %s", c.conn.RemoteAddr().String())
 
+	// 不设置读取超时，让ReadMessage永久阻塞等待消息
+	// 心跳由应用层处理，不使用WebSocket内置的ping/pong
+
+	log.Printf("Starting readPump goroutine...")
 	// 启动读取协程
 	go c.readPump()
 
+	log.Printf("Starting writePump goroutine...")
 	// 启动心跳协程
 	go c.writePump()
+
+	log.Printf("ClientConnection.Start() completed")
 }
 
 // Close 关闭连接
 func (c *ClientConnection) Close() {
-	close(c.done)
-	c.conn.Close()
+	select {
+	case <-c.done:
+		// 已经关闭了
+		return
+	default:
+		close(c.done)
+		c.conn.Close()
+	}
 }
 
 // Send 发送消息
@@ -72,35 +80,47 @@ func (c *ClientConnection) Send(data []byte) {
 func (c *ClientConnection) readPump() {
 	defer c.Close()
 
-	for {
-		select {
-		case <-c.done:
-			return
-		default:
-			// 读取消息
-			_, data, err := c.conn.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					log.Printf("WebSocket error: %v", err)
-				}
-				return
-			}
+	log.Printf("Starting readPump for connection from %s", c.conn.RemoteAddr().String())
 
-			// 发送消息给网关Actor
-			msg := &common.MsgFromWS{
-				Conn: c.conn,
-				Data: data,
-			}
-			// 创建临时context来发送消息
-			tempProps := actor.PropsFromProducer(func() actor.Actor {
-				return &MessageForwarder{
-					targetPID: c.gatewayPID,
-					message:   msg,
-				}
-			})
-			tempPID := c.system.Root.Spawn(tempProps)
-			c.system.Root.Send(tempPID, struct{}{})
+	for {
+		// 先检查连接是否还活着
+		if c.conn == nil {
+			log.Printf("Connection is nil, stopping readPump")
+			return
 		}
+
+		// 不设置读取超时，让ReadMessage永久阻塞等待消息
+		// 心跳由writePump处理，不需要在这里设置超时
+
+		// 读取消息
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			} else {
+				log.Printf("WebSocket read error: %v", err)
+			}
+			return
+		}
+
+		log.Printf("Read WebSocket message: %s", string(data))
+
+		// 检查gatewayPID是否存在
+		if c.gatewayPID == nil {
+			log.Printf("GatewayPID is nil, cannot forward message")
+			continue
+		}
+
+		// 发送消息给网关Actor
+		msg := &common.MsgFromWS{
+			Conn: c.conn,
+			Data: data,
+		}
+
+		log.Printf("Forwarding message to GatewayActor")
+
+		// 直接发送消息，不使用MessageForwarder
+		c.system.Root.Send(c.gatewayPID, msg)
 	}
 }
 
@@ -167,6 +187,8 @@ func NewWebSocketUpgrader() WebSocketUpgrader {
 				// 在生产环境中应该检查Origin
 				return true
 			},
+			// 禁用压缩扩展以避免兼容性问题
+			EnableCompression: false,
 		},
 	}
 }

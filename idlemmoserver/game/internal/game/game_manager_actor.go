@@ -160,8 +160,19 @@ func (a *GameManagerActor) handleNATSPlayerRegister(msg *nats.Msg) {
 
 	// 通过Actor系统发送消息
 	if playerPID, exists := a.players[playerReg.PlayerID]; exists {
-		system := actor.NewActorSystem()
-		system.Root.Send(playerPID, &playerReg)
+		// ✅ 使用正确的ActorSystem
+		a.system.Root.Send(playerPID, &playerReg)
+	} else {
+		log.Printf("Player not found for register: %s, creating new PlayerActor", playerReg.PlayerID)
+		// 如果玩家不存在，创建新的PlayerActor
+		playerProps := actor.PropsFromProducer(func() actor.Actor {
+			return NewPlayerActor(playerReg.PlayerID, a.system, a.nc)
+		})
+		newPlayerPID := a.system.Root.Spawn(playerProps)
+		a.players[playerReg.PlayerID] = newPlayerPID
+
+		// 发送注册消息给新创建的PlayerActor
+		a.system.Root.Send(newPlayerPID, &playerReg)
 	}
 }
 
@@ -175,8 +186,15 @@ func (a *GameManagerActor) handleNATSPlayerUnregister(msg *nats.Msg) {
 
 	// 通过Actor系统发送消息
 	if playerPID, exists := a.players[playerUnreg.PlayerID]; exists {
-		system := actor.NewActorSystem()
-		system.Root.Send(playerPID, &playerUnreg)
+		// ✅ 使用正确的ActorSystem
+		a.system.Root.Send(playerPID, &playerUnreg)
+
+		// 停止PlayerActor并从映射中移除
+		a.system.Root.Stop(playerPID)
+		delete(a.players, playerUnreg.PlayerID)
+		log.Printf("Player unregistered and stopped: %s", playerUnreg.PlayerID)
+	} else {
+		log.Printf("Player not found for unregister: %s", playerUnreg.PlayerID)
 	}
 }
 
@@ -190,8 +208,9 @@ func (a *GameManagerActor) handleNATSStartSequence(msg *nats.Msg) {
 
 	// 查找玩家Actor
 	if playerPID, exists := a.players[startSeq.PlayerID]; exists {
-		system := actor.NewActorSystem()
-		system.Root.Send(playerPID, &startSeq)
+		// ✅ 使用正确的ActorSystem
+		a.system.Root.Send(playerPID, &startSeq)
+		log.Printf("Sent start sequence message to player: %s", startSeq.PlayerID)
 	} else {
 		log.Printf("Player not found for start sequence: %s", startSeq.PlayerID)
 	}
@@ -207,8 +226,9 @@ func (a *GameManagerActor) handleNATSStopSequence(msg *nats.Msg) {
 
 	// 查找玩家Actor
 	if playerPID, exists := a.players[stopSeq.PlayerID]; exists {
-		system := actor.NewActorSystem()
-		system.Root.Send(playerPID, &stopSeq)
+		// ✅ 使用正确的ActorSystem
+		a.system.Root.Send(playerPID, &stopSeq)
+		log.Printf("Sent stop sequence message to player: %s", stopSeq.PlayerID)
 	} else {
 		log.Printf("Player not found for stop sequence: %s", stopSeq.PlayerID)
 	}

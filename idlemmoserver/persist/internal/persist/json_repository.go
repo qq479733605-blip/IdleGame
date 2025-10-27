@@ -96,3 +96,60 @@ func (r *JSONRepository) Exists(playerID string) bool {
 func (r *JSONRepository) Delete(playerID string) error {
 	return r.DeletePlayer(playerID)
 }
+
+// ========== 用户数据相关方法 ==========
+
+// userFilePath 获取用户数据文件路径
+func (r *JSONRepository) userFilePath(username string) string {
+	return filepath.Join(r.path, fmt.Sprintf("user_%s.json", username))
+}
+
+// SaveUser 保存用户数据
+func (r *JSONRepository) SaveUser(user *common.UserData) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	f := r.userFilePath(user.Username)
+	b, err := json.MarshalIndent(user, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal user data: %w", err)
+	}
+	return os.WriteFile(f, b, 0644)
+}
+
+// LoadUser 加载用户数据
+func (r *JSONRepository) LoadUser(username string) (*common.UserData, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	f := r.userFilePath(username)
+	b, err := os.ReadFile(f)
+	if err != nil {
+		return nil, fmt.Errorf("load user file: %w", err)
+	}
+	var user common.UserData
+	if err := json.Unmarshal(b, &user); err != nil {
+		return nil, fmt.Errorf("parse user json: %w", err)
+	}
+	return &user, nil
+}
+
+// UserExists 检查用户是否存在
+func (r *JSONRepository) UserExists(username string) bool {
+	f := r.userFilePath(username)
+	_, err := os.Stat(f)
+	return !os.IsNotExist(err)
+}
+
+// DeleteUser 删除用户数据
+func (r *JSONRepository) DeleteUser(username string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	f := r.userFilePath(username)
+	err := os.Remove(f)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete user file: %w", err)
+	}
+	return nil
+}

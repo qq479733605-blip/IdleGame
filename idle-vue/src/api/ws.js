@@ -6,7 +6,14 @@ let ws = null
 let heartbeatTimer = null
 
 export function connectWS(token) {
-    const url = `ws://localhost:8002/ws?token=${token}`  // 修改为Gateway服务端口
+    console.log('Connecting WebSocket with token:', token ? 'present' : 'MISSING');
+
+    if (!token) {
+        console.error('No token provided for WebSocket connection');
+        return;
+    }
+
+    const url = `ws://localhost:8005/ws?token=${token}`  // 修改为Gateway服务端口
     ws = new WebSocket(url)
 
     ws.onopen = () => {
@@ -26,6 +33,13 @@ export function connectWS(token) {
 
     ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data)
+
+        // 处理心跳响应
+        if (msg.type === 'S_Pong') {
+            console.log('[WS] received pong')
+            return
+        }
+
         emitter.emit('message', msg)
     }
 

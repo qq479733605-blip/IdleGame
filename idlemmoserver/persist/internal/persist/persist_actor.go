@@ -12,14 +12,14 @@ import (
 
 // PersistActor 持久化Actor - 基于原有实现适配
 type PersistActor struct {
-	repo   PlayerRepository
+	repo   *JSONRepository
 	online map[string]*actor.PID // 已注册玩家
 	ticker *time.Ticker
 	nc     *nats.Conn
 }
 
 // NewPersistActor 创建持久化Actor
-func NewPersistActor(repo PlayerRepository, nc *nats.Conn) actor.Actor {
+func NewPersistActor(repo *JSONRepository, nc *nats.Conn) actor.Actor {
 	return &PersistActor{
 		repo:   repo,
 		online: make(map[string]*actor.PID),
@@ -40,6 +40,12 @@ func (p *PersistActor) Receive(ctx actor.Context) {
 		p.handleRegisterPlayer(ctx, msg)
 	case *common.MsgUnregisterPlayer:
 		p.handleUnregisterPlayer(ctx, msg)
+	case *common.MsgSaveUser:
+		p.handleSaveUser(ctx, msg)
+	case *common.MsgLoadUser:
+		p.handleLoadUser(ctx, msg)
+	case *common.MsgUserExists:
+		p.handleUserExists(ctx, msg)
 	case *actor.Stopping:
 		p.handleStopping(ctx)
 	default:
@@ -135,6 +141,33 @@ func (p *PersistActor) registerNATSHandlers(ctx actor.Context) {
 		return
 	}
 
+	// 注册用户保存处理器
+	_, err = p.nc.Subscribe(common.PersistSaveUserSubject, func(msg *nats.Msg) {
+		p.handleNATSSaveUser(msg)
+	})
+	if err != nil {
+		log.Printf("Failed to register save user handler: %v", err)
+		return
+	}
+
+	// 注册用户加载处理器
+	_, err = p.nc.Subscribe(common.PersistLoadUserSubject, func(msg *nats.Msg) {
+		p.handleNATSLoadUser(msg)
+	})
+	if err != nil {
+		log.Printf("Failed to register load user handler: %v", err)
+		return
+	}
+
+	// 注册用户存在检查处理器
+	_, err = p.nc.Subscribe(common.PersistUserExistsSubject, func(msg *nats.Msg) {
+		p.handleNATSUserExists(msg)
+	})
+	if err != nil {
+		log.Printf("Failed to register user exists handler: %v", err)
+		return
+	}
+
 	log.Println("Persist NATS handlers registered")
 }
 
@@ -172,4 +205,121 @@ func (p *PersistActor) handleNATSLoad(msg *nats.Msg) {
 
 	replyData, _ := json.Marshal(reply)
 	msg.Respond(replyData)
+}
+
+// ========== 用户数据NATS处理方法 ==========
+
+// handleNATSSaveUser 处理NATS用户保存请求
+func (p *PersistActor) handleNATSSaveUser(msg *nats.Msg) {
+	log.Printf("🔥 Persist service received save user request via NATS!")
+	log.Printf("🔥 Request data: %s", string(msg.Data))
+
+	var saveMsg common.MsgSaveUser
+	if err := json.Unmarshal(msg.Data, &saveMsg); err != nil {
+		log.Printf("Failed to unmarshal save user message: %v", err)
+		return
+	}
+
+	log.Printf("🔥 Successfully unmarshaled save user request for user: %s", saveMsg.UserData.Username)
+
+	// 处理保存
+	err := p.repo.SaveUser(saveMsg.UserData)
+	if err != nil {
+		log.Printf("Failed to save user via NATS: %v", err)
+		// 即使失败也要发送回复
+		msg.Respond([]byte(`{"success": false, "message": "保存失败"}`))
+	} else {
+		log.Printf("🔥 Successfully saved user: %s", saveMsg.UserData.Username)
+		// 发送成功回复
+		msg.Respond([]byte(`{"success": true, "message": "保存成功"}`))
+	}
+}
+
+// handleNATSLoadUser 处理NATS用户加载请求
+func (p *PersistActor) handleNATSLoadUser(msg *nats.Msg) {
+	var loadMsg common.MsgLoadUser
+	if err := json.Unmarshal(msg.Data, &loadMsg); err != nil {
+		log.Printf("Failed to unmarshal load user message: %v", err)
+		return
+	}
+
+	// 处理加载
+	userData, err := p.repo.LoadUser(loadMsg.Username)
+
+	// 发送回复
+	reply := common.MsgLoadUserResult{
+		UserData: userData,
+		Err:      err,
+	}
+
+	replyData, _ := json.Marshal(reply)
+	msg.Respond(replyData)
+}
+
+// handleNATSUserExists 处理NATS用户存在检查请求
+func (p *PersistActor) handleNATSUserExists(msg *nats.Msg) {
+	log.Printf("🔥 Persist service received user exists request via NATS!")
+	log.Printf("🔥 Request data: %s", string(msg.Data))
+
+	var existsMsg common.MsgUserExists
+	if err := json.Unmarshal(msg.Data, &existsMsg); err != nil {
+		log.Printf("Failed to unmarshal user exists message: %v", err)
+		return
+	}
+
+	log.Printf("🔥 Successfully unmarshaled user exists request for user: %s", existsMsg.Username)
+
+	// 处理检查
+	exists := p.repo.UserExists(existsMsg.Username)
+
+	// 发送回复
+	reply := common.MsgUserExistsResult{
+		Exists: exists,
+	}
+
+	replyData, _ := json.Marshal(reply)
+	msg.Respond(replyData)
+}
+
+// ========== 用户数据处理方法 ==========
+
+// handleSaveUser 处理保存用户数据
+func (p *PersistActor) handleSaveUser(ctx actor.Context, msg *common.MsgSaveUser) {
+	err := p.repo.SaveUser(msg.UserData)
+	if err != nil {
+		log.Printf("Failed to save user %s: %v", msg.UserData.Username, err)
+	} else {
+		log.Printf("User %s saved successfully", msg.UserData.Username)
+	}
+}
+
+// handleLoadUser 处理加载用户数据
+func (p *PersistActor) handleLoadUser(ctx actor.Context, msg *common.MsgLoadUser) {
+	userData, err := p.repo.LoadUser(msg.Username)
+
+	// 发送回复
+	reply := &common.MsgLoadUserResult{
+		UserData: userData,
+		Err:      err,
+	}
+
+	// 通过Actor系统发送回复
+	if msg.ReplyTo != nil {
+		ctx.Send(msg.ReplyTo, reply)
+	}
+}
+
+// handleUserExists 处理检查用户是否存在
+func (p *PersistActor) handleUserExists(ctx actor.Context, msg *common.MsgUserExists) {
+	exists := p.repo.UserExists(msg.Username)
+
+	// 发送回复
+	reply := &common.MsgUserExistsResult{
+		Exists: exists,
+	}
+
+	// 通过Actor系统发送回复
+	if msg.ReplyTo != nil {
+		ctx.Send(msg.ReplyTo, reply)
+	}
 }

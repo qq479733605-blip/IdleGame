@@ -5,14 +5,14 @@ package common
 // 服务器端口
 const (
 	LoginServicePort   = 8001
-	GatewayServicePort = 8002
+	GatewayServicePort = 8005
 	GameServicePort    = 8003
 	PersistServicePort = 8004
 )
 
 // NATS配置
 const (
-	NATSURL     = "nats://localhost:4222"
+	NATSURL     = "nats://localhost:4223"
 	ClusterName = "idle-mmso-cluster"
 )
 

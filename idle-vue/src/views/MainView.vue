@@ -160,6 +160,15 @@ onMounted(() => {
 
   setTimeout(() => {
     isLoading.value = false;
+
+    // 检查token是否存在
+    console.log('Token check:', user.token);
+    if (!user.token) {
+      console.error('No token found, redirecting to login');
+      router.push('/');
+      return;
+    }
+
     // 使用 WebSocket 模块连接
     connectWebSocket(user.token);
     // 设置消息处理
