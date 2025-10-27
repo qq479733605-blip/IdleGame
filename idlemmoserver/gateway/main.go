@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/idle-server/common"
+	"github.com/gin-gonic/gin"
 	"github.com/idle-server/gateway/internal/gate"
 )
 
 func main() {
-	log.Println("Starting Gateway Service...")
+	log.Println("Starting Gateway Service (New Architecture)...")
 
 	// 创建上下文用于优雅关闭
 	ctx, cancel := context.WithCancel(context.Background())
@@ -29,15 +29,26 @@ func main() {
 		log.Fatalf("Failed to start gateway service: %v", err)
 	}
 
-	// 设置HTTP服务器
+	// 设置 Gin 服务器模式
+	gin.SetMode(gin.ReleaseMode)
+
+	// 获取 Gin 路由器
+	router := gatewayService.GetHTTPHandler()
+
+	// 设置HTTP服务器 - 临时使用端口8006避免冲突
+	port := 8005
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", common.GatewayServicePort),
-		Handler: gatewayService.GetHTTPHandler(),
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: router,
 	}
 
 	// 启动HTTP服务器
 	go func() {
-		log.Printf("Gateway service listening on port %d", common.GatewayServicePort)
+		log.Printf("Gateway service listening on port %d", port)
+		log.Printf("WebSocket endpoint: ws://localhost:%d/api/ws", port)
+		log.Printf("Health check: http://localhost:%d/health", port)
+		log.Printf("Debug info: http://localhost:%d/debug", port)
+
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}

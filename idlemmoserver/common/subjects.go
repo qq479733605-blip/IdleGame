@@ -18,14 +18,12 @@ const (
 	AuthGetPlayerSubject = "auth.get_player" // 根据token获取playerID
 
 	// ============ 游戏服务相关 ============
+	GamePlayerConnectSubject    = "game.player.connect"
+	GamePlayerDisconnectSubject = "game.player.disconnect"
 	GamePlayerRegisterSubject   = "game.player.register"
 	GamePlayerUnregisterSubject = "game.player.unregister"
-	GameStartSequenceSubject    = "game.sequence.start"
-	GameStopSequenceSubject     = "game.sequence.stop"
-	GameSequenceResultSubject   = "game.sequence.result"
-	GamePlayerDataSubject       = "game.player.data"
-	GameInventoryUpdateSubject  = "game.inventory.update"
-	GameEquipmentUpdateSubject  = "game.equipment.update"
+	GameStateSubject            = "game.state"
+	GameActionSubject           = "game.action"
 
 	// ============ 持久化服务相关 ============
 	PersistSaveSubject       = "persist.save"
@@ -36,6 +34,8 @@ const (
 	PersistSaveUserSubject   = "persist.save_user"
 	PersistLoadUserSubject   = "persist.load_user"
 	PersistUserExistsSubject = "persist.user_exists"
+	PersistSavePlayerSubject = "persist.save_player"
+	PersistLoadPlayerSubject = "persist.load_player"
 
 	// ============ 网关服务相关 ============
 	GatewayBroadcastSubject = "gateway.broadcast"

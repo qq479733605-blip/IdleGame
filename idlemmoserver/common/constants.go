@@ -12,7 +12,7 @@ const (
 
 // NATS配置
 const (
-	NATSURL     = "nats://localhost:4223"
+	NATSURL     = "nats://localhost:4222"
 	ClusterName = "idle-mmso-cluster"
 )
 

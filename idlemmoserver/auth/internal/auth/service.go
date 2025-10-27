@@ -4,274 +4,291 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
-	"github.com/asynkron/protoactor-go/actor"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/idle-server/common"
-	"github.com/nats-io/nats.go"
+	"github.com/idle-server/common/database"
+	"github.com/idle-server/common/handler"
+	"github.com/idle-server/common/nats"
+	"github.com/idle-server/common/service"
+	natsio "github.com/nats-io/nats.go"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// Service 认证服务
+// Service 统一的认证服务
 type Service struct {
-	nc        *nats.Conn
-	system    *actor.ActorSystem
-	authPID   *actor.PID
-	jwtSecret []byte
+	*service.BaseServiceImpl
+	natsManager *nats.Manager
+	processor   *handler.MessageProcessor
+	jwtSecret   []byte
+	gormDB      *database.GORM
+	redis       *database.Redis
+	userRepo    *database.GORMUserRepository
 }
 
 // NewService 创建新的认证服务
-func NewService() *Service {
+func NewService() service.Service {
 	return &Service{
-		jwtSecret: []byte("your-secret-key-change-in-production"),
+		BaseServiceImpl: service.NewBaseService("Auth"),
+		jwtSecret:       []byte("your-secret-key-change-in-production"),
 	}
 }
 
 // Start 启动服务
 func (s *Service) Start(ctx context.Context) error {
-	// 连接NATS
-	nc, err := nats.Connect(common.NATSURL)
+	// 调用基类 Start 方法
+	if err := s.BaseServiceImpl.Start(ctx); err != nil {
+		return err
+	}
+
+	log.Println("Initializing Auth Service (Database + NATS)...")
+
+	// 初始化GORM数据库
+	gormConfig := database.DefaultGORMConfig()
+	gormDB, err := database.NewGORM(gormConfig)
 	if err != nil {
-		return fmt.Errorf("failed to connect to NATS: %w", err)
+		return fmt.Errorf("failed to initialize GORM database: %w", err)
 	}
-	s.nc = nc
+	s.gormDB = gormDB
 
-	// 创建Actor系统
-	s.system = actor.NewActorSystem()
+	// 初始化Redis
+	redisConfig := database.DefaultRedisConfig()
+	redis, err := database.NewRedis(redisConfig)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Redis: %w", err)
+	}
+	s.redis = redis
 
-	// 创建并启动认证Actor
-	props := actor.PropsFromProducer(NewAuthActor(s.jwtSecret, s.nc))
-	s.authPID = s.system.Root.Spawn(props)
-
-	// 注册NATS处理器
-	if err := s.registerNATSHandlers(s.authPID); err != nil {
-		return fmt.Errorf("failed to register NATS handlers: %w", err)
+	// 使用GORM的AutoMigrate功能运行数据库迁移
+	if err := gormDB.AutoMigrate(
+		&database.User{},
+		&database.Player{},
+		&database.GameProgress{},
+	); err != nil {
+		return fmt.Errorf("failed to run database migrations: %w", err)
 	}
 
-	log.Printf("Auth service started successfully (NATS only)")
+	// 创建GORM仓库
+	s.userRepo = database.NewGORMUserRepository(gormDB.GetDB(), redis)
+
+	// 初始化 NATS 管理器
+	s.natsManager, err = nats.NewManager(common.NATSURL)
+	if err != nil {
+		return fmt.Errorf("failed to initialize NATS manager: %w", err)
+	}
+
+	// 初始化消息处理器
+	s.processor = handler.NewMessageProcessor(s.natsManager)
+
+	// 注册消息处理器
+	if err := s.registerHandlers(); err != nil {
+		return fmt.Errorf("failed to register handlers: %w", err)
+	}
+
+	// 注册 NATS 订阅
+	if err := s.registerNATSSubscriptions(); err != nil {
+		return fmt.Errorf("failed to register NATS subscriptions: %w", err)
+	}
+
+	log.Printf("Auth Service started successfully with database and NATS")
 	return nil
 }
 
 // Stop 停止服务
 func (s *Service) Stop(ctx context.Context) error {
-	if s.nc != nil {
-		s.nc.Close()
+	// 调用基类 Stop 方法
+	if err := s.BaseServiceImpl.Stop(ctx); err != nil {
+		return err
 	}
-	if s.system != nil {
-		s.system.Shutdown()
+
+	log.Println("Stopping Auth Service...")
+
+	// 关闭 NATS 管理器
+	if s.natsManager != nil {
+		s.natsManager.Close()
 	}
+
+	// 关闭Redis连接
+	if s.redis != nil {
+		if err := s.redis.Close(); err != nil {
+			log.Printf("Error closing Redis: %v", err)
+		}
+	}
+
+	// 关闭GORM数据库连接
+	if s.gormDB != nil {
+		if err := s.gormDB.Close(); err != nil {
+			log.Printf("Error closing GORM database: %v", err)
+		}
+	}
+
+	log.Println("Auth Service stopped successfully")
 	return nil
 }
 
-// registerNATSHandlers 注册NATS处理器
-func (s *Service) registerNATSHandlers(authPID *actor.PID) error {
-	// 统一登录处理器
-	loginSub, err := s.nc.Subscribe(common.AuthLoginSubject, func(msg *nats.Msg) {
-		s.handleLogin(authPID, msg)
-	})
-	if err != nil {
-		return err
-	}
+// registerHandlers 注册消息处理器
+func (s *Service) registerHandlers() error {
+	// 注册登录处理器
+	loginHandler := handler.NewLoginHandler(s.natsManager, s.authenticateUser)
+	s.processor.RegisterHandler(loginHandler)
 
-	// 用户注册处理器
-	regSub, err := s.nc.Subscribe(common.AuthRegisterSubject, func(msg *nats.Msg) {
-		s.handleRegister(authPID, msg)
-	})
-	if err != nil {
-		return err
-	}
+	// 注册注册处理器
+	registerHandler := handler.NewRegisterHandler(s.natsManager, s.registerUser)
+	s.processor.RegisterHandler(registerHandler)
 
-	// 获取用户处理器
-	getUserSub, err := s.nc.Subscribe(common.AuthGetUserSubject, func(msg *nats.Msg) {
-		s.handleGetUser(authPID, msg)
-	})
-	if err != nil {
-		return err
-	}
-
-	// Token验证处理器
-	validateTokenSub, err := s.nc.Subscribe(common.AuthValidateTokenSubject, func(msg *nats.Msg) {
-		s.handleValidateToken(authPID, msg)
-	})
-	if err != nil {
-		return err
-	}
-
-	// 根据Token获取PlayerID
-	getPlayerSub, err := s.nc.Subscribe(common.AuthGetPlayerSubject, func(msg *nats.Msg) {
-		s.handleGetPlayerByToken(authPID, msg)
-	})
-	if err != nil {
-		return err
-	}
-
-	// 使用变量避免编译错误
-	_ = loginSub
-	_ = regSub
-	_ = getUserSub
-	_ = validateTokenSub
-	_ = getPlayerSub
-
-	log.Printf("NATS handlers registered for auth service")
+	log.Printf("Auth handlers registered successfully")
 	return nil
 }
 
-// handleLogin 处理登录请求（统一入口）
-func (s *Service) handleLogin(authPID *actor.PID, msg *nats.Msg) {
-	var req common.MsgAuthenticateUser
-	if err := common.Unmarshal(msg.Data, &req); err != nil {
-		log.Printf("Failed to unmarshal login request: %v", err)
-		return
+// registerNATSSubscriptions 注册 NATS 订阅
+func (s *Service) registerNATSSubscriptions() error {
+	// 使用统一的消息处理器订阅登录主题
+	if _, err := s.natsManager.Subscribe(common.AuthLoginSubject, &natsMessageAdapter{
+		processor: s.processor,
+	}); err != nil {
+		return fmt.Errorf("failed to subscribe to login subject: %w", err)
 	}
 
-	// 直接在服务中处理，避免Actor间通信问题
-	result := s.processLogin(&req)
-
-	// 序列化回复
-	data, err := json.Marshal(result)
-	if err != nil {
-		log.Printf("Failed to marshal login result: %v", err)
-		return
+	// 使用统一的消息处理器订阅注册主题
+	if _, err := s.natsManager.Subscribe(common.AuthRegisterSubject, &natsMessageAdapter{
+		processor: s.processor,
+	}); err != nil {
+		return fmt.Errorf("failed to subscribe to register subject: %w", err)
 	}
 
-	// 直接回复NATS消息
-	if err := msg.Respond(data); err != nil {
-		log.Printf("Failed to respond to login request: %v", err)
-	}
+	log.Printf("Auth NATS subscriptions registered successfully")
+	return nil
 }
 
-// handleRegister 处理注册请求
-func (s *Service) handleRegister(authPID *actor.PID, msg *nats.Msg) {
-	log.Printf("🔥 Auth service received register request via NATS!")
-	log.Printf("🔥 Request data: %s", string(msg.Data))
+// Auth Service 现在使用统一的 handler 框架
+// 所有旧的消息处理代码已被移除，现在使用 common/handler 中的处理器
 
-	var req common.MsgRegisterUser
-	if err := common.Unmarshal(msg.Data, &req); err != nil {
-		log.Printf("Failed to unmarshal register request: %v", err)
-		return
-	}
-
-	log.Printf("🔥 Successfully unmarshaled register request for user: %s", req.Username)
-
-	// 直接在服务中处理，避免Actor间通信问题
-	result := s.processRegister(&req)
-
-	// 序列化回复
-	data, err := json.Marshal(result)
-	if err != nil {
-		log.Printf("Failed to marshal register result: %v", err)
-		return
-	}
-
-	// 直接回复NATS消息
-	if err := msg.Respond(data); err != nil {
-		log.Printf("Failed to respond to register request: %v", err)
-	}
+// natsMessageAdapter 消息处理器适配器
+type natsMessageAdapter struct {
+	processor *handler.MessageProcessor
 }
 
-// handleGetUser 处理获取用户请求
-func (s *Service) handleGetUser(authPID *actor.PID, msg *nats.Msg) {
-	var req common.MsgGetUserByPlayerID
-	if err := common.Unmarshal(msg.Data, &req); err != nil {
-		log.Printf("Failed to unmarshal get user request: %v", err)
-		return
-	}
-
-	// 创建回复Actor
-	replyProps := actor.PropsFromProducer(func() actor.Actor {
-		return &GetUserReplyActor{msg: msg}
-	})
-	replyPID := s.system.Root.Spawn(replyProps)
-
-	req.ReplyTo = replyPID
-	s.system.Root.Send(authPID, &req)
+// Handle 实现 nats.MessageHandler 接口
+func (a *natsMessageAdapter) Handle(msg *natsio.Msg) error {
+	return a.processor.ProcessMessage(msg)
 }
 
-// handleValidateToken 处理Token验证请求
-func (s *Service) handleValidateToken(authPID *actor.PID, msg *nats.Msg) {
-	var req common.MsgValidateToken
-	if err := common.Unmarshal(msg.Data, &req); err != nil {
-		log.Printf("Failed to unmarshal validate token request: %v", err)
-		return
-	}
+// authenticateUser 认证用户业务逻辑
+func (s *Service) authenticateUser(username, password string) (*common.MsgAuthenticateUserResult, error) {
+	log.Printf("Processing login request for user: %s", username)
 
-	// 直接处理token验证，不使用Actor系统
-	claims, err := s.validateJWT(req.Token)
+	// 检查用户是否存在
+	userExists, err := s.checkUserExists(username)
 	if err != nil {
-		result := &common.MsgValidateTokenResult{
-			Valid:   false,
-			Message: err.Error(),
-		}
-		data, _ := json.Marshal(result)
-		msg.Respond(data)
-		return
+		log.Printf("Failed to check user existence: %v", err)
+		return nil, fmt.Errorf("authentication service error")
 	}
 
-	playerID, ok := (*claims)["playerID"].(string)
-	if !ok {
-		result := &common.MsgValidateTokenResult{
-			Valid:   false,
-			Message: "invalid player ID in token",
-		}
-		data, _ := json.Marshal(result)
-		msg.Respond(data)
-		return
+	if !userExists {
+		return &common.MsgAuthenticateUserResult{
+			Success: false,
+			Message: "User does not exist",
+		}, nil
 	}
 
-	result := &common.MsgValidateTokenResult{
-		Valid:    true,
+	// 获取用户数据进行密码验证
+	userData, err := s.getUserData(username)
+	if err != nil {
+		log.Printf("Failed to get user data: %v", err)
+		return nil, fmt.Errorf("authentication service error")
+	}
+
+	// 使用bcrypt验证密码
+	if err := bcrypt.CompareHashAndPassword([]byte(userData.Password), []byte(password)); err != nil {
+		log.Printf("Auth: Password verification failed for user %s: %v", userData.Username, err)
+		return &common.MsgAuthenticateUserResult{
+			Success: false,
+			Message: "Invalid password",
+		}, nil
+	}
+	log.Printf("Auth: Password verification successful for user %s", userData.Username)
+
+	// 生成JWT令牌
+	log.Printf("Auth: Generating JWT for PlayerID: %s", userData.PlayerID)
+	token, err := s.generateJWT(userData.PlayerID)
+	if err != nil {
+		log.Printf("Failed to generate JWT: %v", err)
+		return nil, fmt.Errorf("failed to generate authentication token")
+	}
+	log.Printf("Auth: JWT generated successfully: %s...", token[:50])
+
+	result := &common.MsgAuthenticateUserResult{
+		Success:  true,
+		Message:  "Login successful",
+		PlayerID: userData.PlayerID,
+		Token:    token,
+	}
+	log.Printf("Auth: Login successful, returning result: Success=%t, PlayerID=%s", result.Success, result.PlayerID)
+	return result, nil
+}
+
+// registerUser 注册用户业务逻辑
+func (s *Service) registerUser(username, password string) (*common.MsgRegisterUserResult, error) {
+	log.Printf("Processing registration request for user: %s", username)
+
+	// 检查用户是否已存在
+	userExists, err := s.checkUserExists(username)
+	if err != nil {
+		log.Printf("Failed to check user existence: %v", err)
+		return nil, fmt.Errorf("registration service error")
+	}
+
+	if userExists {
+		return &common.MsgRegisterUserResult{
+			Success: false,
+			Message: "Username already exists",
+		}, nil
+	}
+
+	// 生成新的playerID
+	playerID, err := s.generatePlayerID()
+	if err != nil {
+		log.Printf("Failed to generate player ID: %v", err)
+		return nil, fmt.Errorf("registration service error")
+	}
+
+	// 创建用户数据
+	userData := &common.UserData{
+		Username:  username,
+		Password:  password, // 实际应用中应该加密
+		PlayerID:  playerID,
+		CreatedAt: time.Now(),
+		LastLogin: time.Now(),
+	}
+
+	// 保存用户数据
+	if err := s.saveUserData(userData); err != nil {
+		log.Printf("Failed to save user data: %v", err)
+		return nil, fmt.Errorf("failed to create user account")
+	}
+
+	// 注册成功，记录日志
+	log.Printf("User %s registered successfully with playerID: %s", username, playerID)
+
+	// 注意：Token 将在登录接口中生成
+	return &common.MsgRegisterUserResult{
+		Success:  true,
+		Message:  "Registration successful",
 		PlayerID: playerID,
-	}
-	data, _ := json.Marshal(result)
-	msg.Respond(data)
+	}, nil
 }
 
-// validateJWT 验证JWT令牌
-func (s *Service) validateJWT(tokenString string) (*jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return s.jwtSecret, nil
-	})
+// ============ 辅助方法 ============
 
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		return &claims, nil
-	}
-
-	return nil, fmt.Errorf("invalid token")
-}
-
-// handleGetPlayerByToken 处理根据Token获取PlayerID请求
-func (s *Service) handleGetPlayerByToken(authPID *actor.PID, msg *nats.Msg) {
-	var req common.MsgGetPlayerByToken
-	if err := common.Unmarshal(msg.Data, &req); err != nil {
-		log.Printf("Failed to unmarshal get player by token request: %v", err)
-		return
-	}
-
-	// 创建回复Actor
-	replyProps := actor.PropsFromProducer(func() actor.Actor {
-		return &GetPlayerByTokenReplyActor{msg: msg}
-	})
-	replyPID := s.system.Root.Spawn(replyProps)
-
-	req.ReplyTo = replyPID
-	s.system.Root.Send(authPID, &req)
-}
-
-// GenerateToken 生成JWT Token
-func (s *Service) GenerateToken(playerID string) (string, error) {
+// generateJWT 生成JWT令牌
+func (s *Service) generateJWT(playerID string) (string, error) {
 	claims := jwt.MapClaims{
 		"playerID": playerID,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+		"exp":      time.Now().Add(time.Hour * 24).Unix(), // 24小时过期
 		"iat":      time.Now().Unix(),
 	}
 
@@ -279,201 +296,69 @@ func (s *Service) GenerateToken(playerID string) (string, error) {
 	return token.SignedString(s.jwtSecret)
 }
 
-// ValidateToken 验证JWT Token
-func (s *Service) ValidateToken(tokenString string) (*jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return s.jwtSecret, nil
-	})
-
-	if err != nil {
-		return nil, err
+// generatePlayerID 生成新的玩家ID
+func (s *Service) generatePlayerID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
 	}
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		return &claims, nil
-	}
-
-	return nil, fmt.Errorf("invalid token")
+	return "player_" + hex.EncodeToString(bytes), nil
 }
 
-// processLogin 处理登录逻辑
-func (s *Service) processLogin(req *common.MsgAuthenticateUser) *common.MsgAuthenticateUserResult {
-	// 通过NATS请求加载用户数据
-	loadMsg := &common.MsgLoadUser{
-		Username: req.Username,
-	}
+// checkUserExists 检查用户是否存在
+func (s *Service) checkUserExists(username string) (bool, error) {
+	log.Printf("Auth: Checking if user exists in database: %s", username)
 
-	data, err := json.Marshal(loadMsg)
+	// 使用GORM仓库直接查询数据库
+	_, err := s.userRepo.GetUserByUsername(context.Background(), username)
 	if err != nil {
-		log.Printf("Failed to marshal load user message: %v", err)
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "加载用户数据失败",
+		// 检查是否是"用户不存在"的错误
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "record not found") {
+			log.Printf("Auth: User %s does not exist", username)
+			return false, nil // 用户不存在是正常情况
 		}
+		log.Printf("Auth: Database error checking user %s: %v", username, err)
+		return false, fmt.Errorf("database error checking user existence: %w", err)
 	}
 
-	// 发送NATS请求到Persist服务
-	resp, err := s.nc.Request(common.PersistLoadUserSubject, data, 5*time.Second)
-	if err != nil {
-		log.Printf("Failed to load user via NATS: %v", err)
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "无法连接到持久化服务",
-		}
-	}
-
-	var loadResult common.MsgLoadUserResult
-	if err := json.Unmarshal(resp.Data, &loadResult); err != nil {
-		log.Printf("Failed to unmarshal load user result: %v", err)
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "解析用户数据失败",
-		}
-	}
-
-	if loadResult.Err != nil {
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "用户不存在",
-		}
-	}
-
-	user := loadResult.UserData
-
-	// 验证密码
-	if !verifyPassword(req.Password, user.Password) {
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "密码错误",
-		}
-	}
-
-	// 更新最后登录时间
-	user.LastLogin = time.Now()
-
-	// 通过NATS保存更新的用户数据
-	saveMsg := &common.MsgSaveUser{
-		UserData: user,
-	}
-
-	saveData, err := json.Marshal(saveMsg)
-	if err != nil {
-		log.Printf("Failed to marshal save user message: %v", err)
-	} else {
-		if _, err := s.nc.Request(common.PersistSaveUserSubject, saveData, 5*time.Second); err != nil {
-			log.Printf("Failed to save user via NATS: %v", err)
-		}
-	}
-
-	// 生成JWT Token
-	token, err := s.GenerateToken(user.PlayerID)
-	if err != nil {
-		return &common.MsgAuthenticateUserResult{
-			Success: false,
-			Message: "生成token失败",
-		}
-	}
-
-	return &common.MsgAuthenticateUserResult{
-		Success:  true,
-		Message:  "登录成功",
-		PlayerID: user.PlayerID,
-		Token:    token,
-	}
+	log.Printf("Auth: User %s exists", username)
+	return true, nil
 }
 
-// processRegister 处理注册逻辑
-func (s *Service) processRegister(req *common.MsgRegisterUser) *common.MsgRegisterUserResult {
-	// 通过NATS检查用户是否已存在
-	existsMsg := &common.MsgUserExists{
-		Username: req.Username,
-	}
+// getUserData 获取用户数据
+func (s *Service) getUserData(username string) (*common.UserData, error) {
+	log.Printf("Auth: Loading user data from database: %s", username)
 
-	data, err := json.Marshal(existsMsg)
+	// 使用GORM仓库直接从数据库加载用户数据
+	userData, err := s.userRepo.GetUserByUsername(context.Background(), username)
 	if err != nil {
-		log.Printf("Failed to marshal user exists message: %v", err)
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "注册失败: 序列化请求出错",
-		}
+		log.Printf("Auth: Failed to load user %s: %v", username, err)
+		return nil, fmt.Errorf("failed to load user data: %w", err)
 	}
 
-	// 发送NATS请求到Persist服务
-	resp, err := s.nc.Request(common.PersistUserExistsSubject, data, 5*time.Second)
-	if err != nil {
-		log.Printf("Failed to check user existence via NATS: %v", err)
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "注册失败: 无法连接到持久化服务",
-		}
-	}
-
-	var existsResult common.MsgUserExistsResult
-	if err := json.Unmarshal(resp.Data, &existsResult); err != nil {
-		log.Printf("Failed to unmarshal user exists result: %v", err)
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "注册失败: 解析响应出错",
-		}
-	}
-
-	// 如果用户已存在，返回错误
-	if existsResult.Exists {
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "用户名已存在",
-		}
-	}
-
-	// 生成PlayerID
-	playerID := GenerateRandomString(16)
-
-	// 创建用户
-	user := &common.UserData{
-		Username:  req.Username,
-		Password:  hashPassword(req.Password),
-		PlayerID:  playerID,
-		CreatedAt: time.Now(),
-		LastLogin: time.Now(),
-	}
-
-	// 通过NATS保存用户数据
-	saveMsg := &common.MsgSaveUser{
-		UserData: user,
-	}
-
-	saveData, err := json.Marshal(saveMsg)
-	if err != nil {
-		log.Printf("Failed to marshal save user message: %v", err)
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "注册失败: 序列化用户数据出错",
-		}
-	}
-
-	// 发送NATS请求到Persist服务
-	_, err = s.nc.Request(common.PersistSaveUserSubject, saveData, 5*time.Second)
-	if err != nil {
-		log.Printf("Failed to save user via NATS: %v", err)
-		return &common.MsgRegisterUserResult{
-			Success: false,
-			Message: "注册失败: 无法保存用户数据",
-		}
-	}
-
-	return &common.MsgRegisterUserResult{
-		Success:  true,
-		Message:  "注册成功",
-		PlayerID: playerID,
-	}
+	log.Printf("Auth: User data loaded successfully for: %s (PlayerID: %s)", userData.Username, userData.PlayerID)
+	return userData, nil
 }
 
-// GenerateRandomString 生成随机字符串
-func GenerateRandomString(length int) string {
-	bytes := make([]byte, length)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)[:length]
+// saveUserData 保存用户数据
+func (s *Service) saveUserData(userData *common.UserData) error {
+	log.Printf("Auth: Saving user data directly to database for user: %s", userData.Username)
+
+	// 使用GORM仓库直接保存用户到数据库
+	savedUserData, err := s.userRepo.CreateUser(context.Background(), userData.Username, userData.Password)
+	if err != nil {
+		log.Printf("Failed to save user %s: %v", userData.Username, err)
+		return fmt.Errorf("failed to save user data: %w", err)
+	}
+
+	log.Printf("User data saved successfully for: %s (Generated PlayerID: %s)", savedUserData.Username, savedUserData.PlayerID)
+	return nil
 }
+
+// Auth 服务重构完成
+// 使用统一的架构：
+// - 继承 BaseServiceImpl 获得标准服务生命周期
+// - 使用 NATSManager 统一 NATS 通信
+// - 使用 MessageProcessor 和 common/handler 中的 AuthHandler 处理业务逻辑
+// - 消除了所有重复的 NATS 和消息处理代码
+// - 现在与其他微服务保持一致的架构模式

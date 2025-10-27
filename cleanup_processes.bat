@@ -1,0 +1,29 @@
+@echo off
+echo Cleaning up duplicate service processes...
+
+echo Killing all Gateway processes...
+for /f "tokens=2" %%A in ('tasklist /fi "windowtitle eq go run ." /fo csv ^| find "go.exe"') do (
+    echo Killing process %%A...
+    taskkill /F /PID %%A >nul 2>&1
+)
+
+echo Killing all Auth processes...
+for /f "tokens=2" %%A in ('tasklist /fi "imagename eq go.exe" /fo csv ^| find "auth"') do (
+    echo Killing process %%A...
+    taskkill /F /PID %%A >nul 2>&1
+)
+
+echo Killing all Persist processes...
+for /f "tokens=2" %%A in ('tasklist /fi "imagename eq go.exe" /fo csv ^| find "persist"') do (
+    echo Killing process %%A...
+    taskkill /F /PID %%A >nul 2>&1
+)
+
+echo Killing NATS server...
+for /f "tokens=2" %%A in ('tasklist /fi "imagename eq nats-server.exe" /fo csv ^| find "nats-server"') do (
+    echo Killing NATS process %%A...
+    taskkill /F /PID %%A >nul 2>&1
+)
+
+echo Cleanup completed!
+timeout /t 3 >nul

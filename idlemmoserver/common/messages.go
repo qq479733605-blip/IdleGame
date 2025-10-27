@@ -16,11 +16,10 @@ type MsgFromWS struct {
 // MsgWSClosed WebSocket关闭
 type MsgWSClosed struct{ Conn *websocket.Conn }
 
-// MsgClientPayload Gateway → Player：客户端载荷
+// MsgClientPayload Gateway → Game：客户端载荷
 type MsgClientPayload struct {
 	PlayerID string
-	Conn     *websocket.Conn
-	Raw      []byte
+	Data     []byte
 }
 
 // MsgConnClosed 连接断开通知
@@ -30,6 +29,20 @@ type MsgConnClosed struct{ Conn *websocket.Conn }
 type MsgToClient struct {
 	PlayerID string
 	Data     []byte
+}
+
+// ============ Token验证相关消息 ============
+
+// MsgVerifyToken 验证Token请求
+type MsgVerifyToken struct {
+	Token string
+}
+
+// MsgVerifyTokenResult 验证Token结果
+type MsgVerifyTokenResult struct {
+	Success  bool
+	PlayerID string
+	Error    string
 }
 
 // ============ 玩家状态相关消息 ============
@@ -43,33 +56,18 @@ type MsgPlayerReconnect struct{ Conn *websocket.Conn }
 // MsgCheckExpire 检查过期
 type MsgCheckExpire struct{}
 
-// ============ 游戏逻辑相关消息 ============
+// ============ 玩家管理相关消息 ============
 
-// MsgStartSequence 开始修炼序列
-type MsgStartSequence struct {
+// MsgPlayerConnect 玩家连接
+type MsgPlayerConnect struct {
 	PlayerID string
-	SeqID    string
-	Target   int64
+	Conn     *websocket.Conn
 }
 
-// MsgStopSequence 停止修炼序列
-type MsgStopSequence struct {
+// MsgPlayerDisconnect 玩家断开连接
+type MsgPlayerDisconnect struct {
 	PlayerID string
 }
-
-// MsgSequenceResult 修炼序列结果
-type MsgSequenceResult struct {
-	PlayerID   string
-	SeqID      string
-	Result     TickResult
-	StopReason string // "stopped", "target_reached", "level_up"
-}
-
-// MsgSequenceTick 序列Tick
-type MsgSequenceTick struct{}
-
-// MsgSequenceStop 序列停止
-type MsgSequenceStop struct{}
 
 // ============ 持久化相关消息 ============
 
@@ -79,16 +77,33 @@ type MsgSavePlayer struct {
 	PlayerData *PlayerData
 }
 
-// MsgLoadPlayer 加载玩家数据
-type MsgLoadPlayer struct {
-	PlayerID string
-	ReplyTo  *actor.PID
+// ============ 认证相关消息 ============
+
+// MsgRegisterUser 注册用户
+type MsgRegisterUser struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
-// MsgLoadResult 加载结果
-type MsgLoadResult struct {
-	Data *PlayerData
-	Err  error
+// MsgRegisterUserResult 注册用户结果
+type MsgRegisterUserResult struct {
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	PlayerID string `json:"playerId"`
+}
+
+// MsgAuthenticateUser 认证用户
+type MsgAuthenticateUser struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// MsgAuthenticateUserResult 认证用户结果
+type MsgAuthenticateUserResult struct {
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	PlayerID string `json:"playerId"`
+	Token    string `json:"token"`
 }
 
 // MsgSaveUser 保存用户数据
@@ -119,92 +134,17 @@ type MsgUserExistsResult struct {
 	Exists bool
 }
 
-// ============ 认证相关消息 ============
+// ============ 持久化相关消息 ============
 
-// MsgRegisterUser 注册用户
-type MsgRegisterUser struct {
-	Username string
-	Password string
-	ReplyTo  *actor.PID
-}
-
-// MsgRegisterUserResult 注册用户结果
-type MsgRegisterUserResult struct {
-	Success  bool   `json:"success"`
-	Message  string `json:"message"`
-	PlayerID string `json:"playerId"`
-}
-
-// MsgAuthenticateUser 认证用户
-type MsgAuthenticateUser struct {
-	Username string     `json:"username"`
-	Password string     `json:"password"`
-	ReplyTo  *actor.PID `json:"-"`
-}
-
-// MsgAuthenticateUserResult 认证用户结果
-type MsgAuthenticateUserResult struct {
-	Success  bool   `json:"success"`
-	Message  string `json:"message"`
-	PlayerID string `json:"playerId"`
-	Token    string `json:"token"`
-}
-
-// MsgGetUserByPlayerID 根据PlayerID获取用户
-type MsgGetUserByPlayerID struct {
+// MsgLoadPlayer 加载玩家数据
+type MsgLoadPlayer struct {
 	PlayerID string
-	ReplyTo  *actor.PID
 }
 
-// MsgGetUserByPlayerIDResult 获取用户结果
-type MsgGetUserByPlayerIDResult struct {
-	User   *UserData
-	Exists bool
-}
-
-// MsgValidateToken 验证Token
-type MsgValidateToken struct {
-	Token   string
-	ReplyTo *actor.PID
-}
-
-// MsgValidateTokenResult Token验证结果
-type MsgValidateTokenResult struct {
-	Valid    bool
-	PlayerID string
-	Message  string
-}
-
-// MsgGetPlayerByToken 根据Token获取PlayerID
-type MsgGetPlayerByToken struct {
-	Token   string
-	ReplyTo *actor.PID
-}
-
-// MsgGetPlayerByTokenResult 获取PlayerID结果
-type MsgGetPlayerByTokenResult struct {
-	Success  bool
-	PlayerID string
-	Message  string
-}
-
-// ============ Actor注册相关消息 ============
-
-// MsgRegisterPlayer 注册玩家Actor
-type MsgRegisterPlayer struct {
-	PlayerID string
-	PID      *actor.PID
-}
-
-// MsgUnregisterPlayer 注销玩家Actor
-type MsgUnregisterPlayer struct{ PlayerID string }
-
-// ============ 装备相关消息 ============
-
-// MsgUpdateEquipmentBonus 更新装备加成
-type MsgUpdateEquipmentBonus struct {
-	PlayerID string
-	Bonus    EquipmentBonus
+// MsgLoadResult 加载结果
+type MsgLoadResult struct {
+	Data *PlayerData
+	Err  error
 }
 
 // ============ 客户端消息类型 ============
@@ -232,18 +172,6 @@ type CLoginAuth struct {
 type CLogin struct {
 	Type  string `json:"type"`
 	Token string `json:"token"`
-}
-
-// CStartSeq 开始修炼
-type CStartSeq struct {
-	Type   string `json:"type"`
-	SeqID  string `json:"seq_id"`
-	Target int64  `json:"target"`
-}
-
-// CStopSeq 停止修炼
-type CStopSeq struct {
-	Type string `json:"type"`
 }
 
 // ============ 服务端消息类型 ============
@@ -282,24 +210,4 @@ type S_PlayerData struct {
 	Type     string      `json:"type"`
 	PlayerID string      `json:"player_id"`
 	Data     *PlayerData `json:"data"`
-}
-
-// S_SeqResult 修炼结果
-type S_SeqResult struct {
-	Type       string     `json:"type"`
-	SeqID      string     `json:"seq_id"`
-	Result     TickResult `json:"result"`
-	StopReason string     `json:"stop_reason"`
-}
-
-// S_InventoryUpdate 库存更新
-type S_InventoryUpdate struct {
-	Type      string     `json:"type"`
-	Inventory *Inventory `json:"inventory"`
-}
-
-// S_EquipmentUpdate 装备更新
-type S_EquipmentUpdate struct {
-	Type      string                    `json:"type"`
-	Equipment map[string]EquipmentState `json:"equipment"`
 }

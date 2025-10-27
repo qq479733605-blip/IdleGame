@@ -4,7 +4,7 @@ go 1.25.2
 
 require (
 	github.com/asynkron/protoactor-go v0.0.0-20251008162023-d5226bee08eb
-	github.com/golang-jwt/jwt/v5 v5.2.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/idle-server/common v0.0.0
 	github.com/nats-io/nats.go v1.46.1
 )
@@ -40,7 +40,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
+	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )

@@ -44,7 +44,20 @@
       "Bash(where:*)",
       "Bash(\"C:\\Users\\Admin\\go\\bin\\nats-server.exe\" -p 4222)",
       "Bash(cmd:*)",
-      "Bash(\"C:\\Users\\Admin\\go\\bin\\nats-server.exe\" -p 4223)"
+      "Bash(\"C:\\Users\\Admin\\go\\bin\\nats-server.exe\" -p 4223)",
+      "Bash(go get:*)",
+      "Bash(rm:*)",
+      "Bash(dir:*)",
+      "Bash(start_simplified.bat:*)",
+      "Bash(timeout 10s go run:*)",
+      "Bash(mysql:*)",
+      "Bash(timeout:*)",
+      "Bash(docker restart:*)",
+      "Bash(go mod init:*)",
+      "Bash(./stop_all.bat)",
+      "Bash(redis-cli:*)",
+      "Bash(move:*)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []
